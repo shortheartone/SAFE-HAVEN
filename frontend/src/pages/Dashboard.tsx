@@ -1,7 +1,10 @@
 import { useWallet } from '../context/WalletContext'
 import { useDeposits } from '../hooks/useDeposits'
+import { useInsurancePool } from '../hooks/useInsurancePool'
 import type { ContractInfo } from '../App'
 import { DepositCard } from '../components/DepositCard'
+import { InsurancePool } from '../components/InsurancePool'
+import { ClaimStatusTracker } from '../components/ClaimStatusTracker'
 import { TxStatusBadge } from '../components/TxStatusBadge'
 import { buildWithdraw, buildCancelDeposit, submitTx } from '../lib/stellar'
 import { shortAddr } from '../lib/format'
@@ -16,6 +19,7 @@ interface DashboardProps {
 export function Dashboard({ contractInfo }: DashboardProps) {
   const { wallet, isRestoringSession, signTransaction } = useWallet()
   const { deposits, loading, error, refresh, pollRemoveDeposit } = useDeposits(wallet?.address ?? null)
+  const { pool, terms, claims, coverage, loading: insuranceLoading } = useInsurancePool(deposits)
   const [txStatus, setTxStatus] = useState<TxStatus>('idle')
   const [txHash,   setTxHash]   = useState<string | undefined>()
   const [txError,  setTxError]  = useState<string | undefined>()
@@ -189,6 +193,14 @@ export function Dashboard({ contractInfo }: DashboardProps) {
       {/* Tx status */}
       <TxStatusBadge status={txStatus} txHash={txHash} error={txError} />
 
+      {/* Insurance Pool */}
+      <InsurancePool pool={pool} terms={terms} loading={insuranceLoading} />
+
+      {/* Claim Status Tracker */}
+      {Object.values(claims).some((c) => c.status !== 'none') && (
+        <ClaimStatusTracker claims={claims} deposits={deposits} />
+      )}
+
       {/* Deposits */}
       <div>
         <div className="flex items-center justify-between mb-4">
@@ -236,6 +248,8 @@ export function Dashboard({ contractInfo }: DashboardProps) {
               <DepositCard
                 key={d.depositId}
                 deposit={d}
+                coverage={coverage[d.depositId] || null}
+                claimStatus={claims[d.depositId] || null}
                 onWithdraw={handleWithdraw}
                 onCancel={handleCancel}
                 txPending={pendingId === d.depositId}
