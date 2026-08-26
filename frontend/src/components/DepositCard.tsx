@@ -1,16 +1,19 @@
 import { useState } from 'react'
-import type { Deposit } from '../types'
+import type { Deposit, InsuranceCoverage, ClaimStatus } from '../types'
 import { stroopsToXlm, formatUnlockDate, formatCountdown, formatBps, shortAddr, explorerAddrUrl } from '../lib/format'
+import { DepositInsuranceBadge } from './DepositInsuranceBadge'
 import { CONFIG } from '../config'
 
 interface DepositCardProps {
   deposit: Deposit
+  coverage?: InsuranceCoverage | null
+  claimStatus?: ClaimStatus | null
   onWithdraw: (depositId: number) => void
   onCancel: (depositId: number) => void
   txPending: boolean
 }
 
-export function DepositCard({ deposit, onWithdraw, onCancel, txPending }: DepositCardProps) {
+export function DepositCard({ deposit, coverage, claimStatus, onWithdraw, onCancel, txPending }: DepositCardProps) {
   const [showDetails, setShowDetails] = useState(false)
 
   const isXlm   = deposit.token === CONFIG.NATIVE_TOKEN
@@ -73,6 +76,13 @@ export function DepositCard({ deposit, onWithdraw, onCancel, txPending }: Deposi
       {hasPenalty && !isUnlocked && (
         <div className="mt-2 text-xs text-orange-400 bg-orange-900/20 rounded-lg px-3 py-2 border border-orange-800/30">
           Early exit penalty: {formatBps(deposit.penaltyBps)} — you'd receive ~{stroopsToXlm(refundAmount)} {isXlm ? 'XLM' : 'tokens'}
+        </div>
+      )}
+
+      {/* Insurance Badge */}
+      {coverage && (
+        <div className="mt-3">
+          <DepositInsuranceBadge coverage={coverage} claimStatus={claimStatus || null} compact />
         </div>
       )}
 

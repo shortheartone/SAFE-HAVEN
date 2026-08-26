@@ -8,6 +8,7 @@ import { Dashboard } from './pages/Dashboard'
 import { DepositPage } from './pages/DepositPage'
 import { WithdrawPage } from './pages/WithdrawPage'
 import { AdminPage } from './pages/AdminPage'
+import { SettingsPage } from './pages/SettingsPage'
 import type { PageTab } from './types'
 
 // Re-export ContractInfo shape so pages can import it from App
@@ -47,12 +48,14 @@ function AppInner() {
               {activeTab === 'deposit'   && 'New Deposit'}
               {activeTab === 'withdraw'  && 'Withdraw'}
               {activeTab === 'admin'     && 'Admin Panel'}
+              {activeTab === 'settings'  && 'Settings'}
             </h1>
             <p className="text-slate-400 text-sm mt-0.5">
               {activeTab === 'dashboard' && 'View and manage all your time-locked deposits'}
               {activeTab === 'deposit'   && 'Lock tokens until a future date'}
               {activeTab === 'withdraw'  && 'Withdraw unlocked tokens or cancel early'}
               {activeTab === 'admin'     && 'Contract administration controls'}
+              {activeTab === 'settings'  && 'Export and import deposit templates'}
             </p>
           </div>
 
@@ -68,6 +71,12 @@ function AppInner() {
         )}
         {activeTab === 'withdraw' && (
           <WithdrawPage />
+        )}
+        {activeTab === 'admin' && (
+          <AdminPage contractInfo={contractInfo} onContractInfoRefresh={contractInfo.refresh} />
+        )}
+        {activeTab === 'settings' && (
+          <SettingsPage />
         )}
         {activeTab === 'admin' && (
           <AdminPage contractInfo={contractInfo} onContractInfoRefresh={contractInfo.refresh} />
