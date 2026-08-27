@@ -21,7 +21,7 @@ pub use constants::{
     MAX_BATCH_SIZE, MAX_DEPOSIT_AMOUNT, MAX_LOCK_DURATION_SECS, MIN_LOCK_DURATION_SECS,
 };
 
-pub use types::STORAGE_VERSION;
+pub use types::{Analytics, TokenAnalytics, STORAGE_VERSION};
 
 pub use contract::SafeHaven;
 pub use contract::SafeHavenClient;

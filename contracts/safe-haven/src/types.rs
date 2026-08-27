@@ -35,6 +35,8 @@ pub enum VaultKey {
     /// Persists the schema version written by the last `migrate()` call (or 1
     /// for contracts that were initialized before versioning was introduced).
     StorageVersion,
+    Analytics,
+    TokenAnalytics(Address),
 }
 
 #[contracttype]
@@ -65,4 +67,29 @@ pub struct Page<T> {
     pub items: soroban_sdk::Vec<T>,
     /// Total number of active items across all pages
     pub total_count: u32,
+}
+
+/// Monotonic contract-wide usage counters. Amounts are aggregated across all
+/// tokens and are intended for activity counts only; use `TokenAnalytics` for
+/// amount accounting.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Analytics {
+    pub deposits: u32,
+    pub withdrawals: u32,
+    pub cancellations: u32,
+    pub emergency_withdrawals: u32,
+    pub active_deposits: u32,
+}
+
+/// Usage counters for one token address.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenAnalytics {
+    pub deposited: i128,
+    pub withdrawn: i128,
+    pub cancelled: i128,
+    pub penalties: i128,
+    pub active_amount: i128,
+    pub active_deposits: u32,
 }

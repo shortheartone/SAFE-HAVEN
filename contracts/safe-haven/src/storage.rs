@@ -1,6 +1,6 @@
 use soroban_sdk::{Address, Env, Vec};
 
-use crate::types::{VaultEntry, VaultKey, LedgerVaultEntry, MAX_LOCK_DURATION_SECS};
+use crate::types::{Analytics, TokenAnalytics, VaultEntry, VaultKey, LedgerVaultEntry, MAX_LOCK_DURATION_SECS};
 
 // Number of seconds per ledger — Soroban ledgers are ~5 seconds apart.
 pub const LEDGER_SECONDS: u64 = 5;
@@ -248,6 +248,38 @@ pub fn set_fee_recipient(env: &Env, recipient: &Address) {
 
 pub fn get_fee_recipient(env: &Env) -> Option<Address> {
     env.storage().persistent().get(&VaultKey::FeeRecipient)
+}
+
+pub fn get_analytics(env: &Env) -> Analytics {
+    env.storage().persistent().get(&VaultKey::Analytics).unwrap_or(Analytics {
+        deposits: 0,
+        withdrawals: 0,
+        cancellations: 0,
+        emergency_withdrawals: 0,
+        active_deposits: 0,
+    })
+}
+
+pub fn set_analytics(env: &Env, analytics: &Analytics) {
+    env.storage().persistent().set(&VaultKey::Analytics, analytics);
+    env.storage().persistent().extend_ttl(&VaultKey::Analytics, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+pub fn get_token_analytics(env: &Env, token: &Address) -> TokenAnalytics {
+    env.storage().persistent().get(&VaultKey::TokenAnalytics(token.clone())).unwrap_or(TokenAnalytics {
+        deposited: 0,
+        withdrawn: 0,
+        cancelled: 0,
+        penalties: 0,
+        active_amount: 0,
+        active_deposits: 0,
+    })
+}
+
+pub fn set_token_analytics(env: &Env, token: &Address, analytics: &TokenAnalytics) {
+    let key = VaultKey::TokenAnalytics(token.clone());
+    env.storage().persistent().set(&key, analytics);
+    env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
 }
 
 // ----------------------------------------------------------------

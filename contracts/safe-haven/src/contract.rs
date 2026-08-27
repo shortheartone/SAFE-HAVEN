@@ -12,8 +12,52 @@ use crate::{
     },
     errors::VaultError,
     events, storage,
-    types::{VaultEntry, LedgerVaultEntry, Page, STORAGE_VERSION},
+    types::{Analytics, TokenAnalytics, VaultEntry, LedgerVaultEntry, Page, STORAGE_VERSION},
 };
+
+fn record_deposit(env: &Env, token: &Address, amount: i128) {
+    let mut analytics = storage::get_analytics(env);
+    analytics.deposits = analytics.deposits.saturating_add(1);
+    analytics.active_deposits = analytics.active_deposits.saturating_add(1);
+    storage::set_analytics(env, &analytics);
+
+    let mut token_analytics = storage::get_token_analytics(env, token);
+    token_analytics.deposited = token_analytics.deposited.saturating_add(amount);
+    token_analytics.active_amount = token_analytics.active_amount.saturating_add(amount);
+    token_analytics.active_deposits = token_analytics.active_deposits.saturating_add(1);
+    storage::set_token_analytics(env, token, &token_analytics);
+}
+
+fn record_withdrawal(env: &Env, token: &Address, amount: i128, emergency: bool) {
+    let mut analytics = storage::get_analytics(env);
+    if emergency {
+        analytics.emergency_withdrawals = analytics.emergency_withdrawals.saturating_add(1);
+    } else {
+        analytics.withdrawals = analytics.withdrawals.saturating_add(1);
+    }
+    analytics.active_deposits = analytics.active_deposits.saturating_sub(1);
+    storage::set_analytics(env, &analytics);
+
+    let mut token_analytics = storage::get_token_analytics(env, token);
+    token_analytics.withdrawn = token_analytics.withdrawn.saturating_add(amount);
+    token_analytics.active_amount = token_analytics.active_amount.saturating_sub(amount);
+    token_analytics.active_deposits = token_analytics.active_deposits.saturating_sub(1);
+    storage::set_token_analytics(env, token, &token_analytics);
+}
+
+fn record_cancellation(env: &Env, token: &Address, amount: i128, penalty: i128) {
+    let mut analytics = storage::get_analytics(env);
+    analytics.cancellations = analytics.cancellations.saturating_add(1);
+    analytics.active_deposits = analytics.active_deposits.saturating_sub(1);
+    storage::set_analytics(env, &analytics);
+
+    let mut token_analytics = storage::get_token_analytics(env, token);
+    token_analytics.cancelled = token_analytics.cancelled.saturating_add(amount);
+    token_analytics.penalties = token_analytics.penalties.saturating_add(penalty);
+    token_analytics.active_amount = token_analytics.active_amount.saturating_sub(amount);
+    token_analytics.active_deposits = token_analytics.active_deposits.saturating_sub(1);
+    storage::set_token_analytics(env, token, &token_analytics);
+}
 
 #[contract]
 pub struct SafeHaven;
@@ -131,6 +175,7 @@ impl SafeHaven {
 
         storage::set_deposit(&env, &depositor, deposit_id, &entry);
         storage::add_depositor(&env, &depositor);
+        record_deposit(&env, &token, amount);
         events::deposit(&env, &depositor, &token, amount, unlock_time, deposit_id);
 
         Ok(deposit_id)
@@ -197,6 +242,7 @@ impl SafeHaven {
 
         storage::set_deposit(&env, &depositor, deposit_id, &entry);
         storage::add_depositor(&env, &depositor);
+        record_deposit(&env, &token, amount);
         events::deposit(&env, &depositor, &token, amount, unlock_time, deposit_id);
 
         Ok(deposit_id)
@@ -262,6 +308,7 @@ impl SafeHaven {
 
         storage::set_deposit_by_ledger(&env, &depositor, deposit_id, &entry);
         storage::add_depositor(&env, &depositor);
+        record_deposit(&env, &token, amount);
         events::deposit_by_ledger(&env, &depositor, &token, amount, unlock_ledger, deposit_id);
 
         Ok(deposit_id)
@@ -301,6 +348,7 @@ impl SafeHaven {
                 token_client.transfer(&contract, &depositor, &refund);
             }
 
+            record_cancellation(&env, &entry.token, entry.amount, penalty);
             events::deposit_cancelled(&env, &depositor, &entry.token, entry.amount, penalty, deposit_id);
             return Ok(());
         }
@@ -332,6 +380,7 @@ impl SafeHaven {
                 token_client.transfer(&contract, &depositor, &refund);
             }
 
+            record_cancellation(&env, &entry.token, entry.amount, penalty);
             events::deposit_cancelled(&env, &depositor, &entry.token, entry.amount, penalty, deposit_id);
             return Ok(());
         }
@@ -361,6 +410,7 @@ impl SafeHaven {
             let token_client = token::Client::new(&env, &entry.token);
             token_client.transfer(&env.current_contract_address(), &depositor, &entry.amount);
 
+            record_withdrawal(&env, &entry.token, entry.amount, false);
             events::withdraw(&env, &depositor, &entry.token, entry.amount, deposit_id);
             return Ok(());
         }
@@ -380,6 +430,7 @@ impl SafeHaven {
             let token_client = token::Client::new(&env, &entry.token);
             token_client.transfer(&env.current_contract_address(), &depositor, &entry.amount);
 
+            record_withdrawal(&env, &entry.token, entry.amount, false);
             events::withdraw(&env, &depositor, &entry.token, entry.amount, deposit_id);
             return Ok(());
         }
@@ -410,6 +461,7 @@ impl SafeHaven {
             let token_client = token::Client::new(&env, &entry.token);
             token_client.transfer(&env.current_contract_address(), &recipient, &entry.amount);
 
+            record_withdrawal(&env, &entry.token, entry.amount, false);
             events::withdraw_to(&env, &depositor, &recipient, &entry.token, entry.amount);
             return Ok(());
         }
@@ -429,6 +481,7 @@ impl SafeHaven {
             let token_client = token::Client::new(&env, &entry.token);
             token_client.transfer(&env.current_contract_address(), &recipient, &entry.amount);
 
+            record_withdrawal(&env, &entry.token, entry.amount, false);
             events::withdraw_to(&env, &depositor, &recipient, &entry.token, entry.amount);
             return Ok(());
         }
@@ -459,6 +512,7 @@ impl SafeHaven {
             let token_client = token::Client::new(&env, &entry.token);
             token_client.transfer(&env.current_contract_address(), &depositor, &entry.amount);
 
+            record_withdrawal(&env, &entry.token, entry.amount, true);
             events::emergency_withdraw(&env, &admin, &depositor, &entry.token, entry.amount, deposit_id);
             return Ok(());
         }
@@ -473,6 +527,7 @@ impl SafeHaven {
             let token_client = token::Client::new(&env, &entry.token);
             token_client.transfer(&env.current_contract_address(), &depositor, &entry.amount);
 
+            record_withdrawal(&env, &entry.token, entry.amount, true);
             events::emergency_withdraw(&env, &admin, &depositor, &entry.token, entry.amount, deposit_id);
             return Ok(());
         }
@@ -695,6 +750,16 @@ impl SafeHaven {
 
     pub fn get_fee_recipient(env: Env) -> Option<Address> {
         storage::get_fee_recipient(&env)
+    }
+
+    /// Returns lifecycle counts and the current number of active deposits.
+    pub fn get_analytics(env: Env) -> Analytics {
+        storage::get_analytics(&env)
+    }
+
+    /// Returns amount and lifecycle counters for one token address.
+    pub fn get_token_analytics(env: Env, token: Address) -> TokenAnalytics {
+        storage::get_token_analytics(&env, &token)
     }
 
     pub fn get_depositor_count(env: Env) -> u32 {

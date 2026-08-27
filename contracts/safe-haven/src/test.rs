@@ -1481,6 +1481,68 @@ fn test_full_lifecycle_deposit_withdraw_redeposit() {
 }
 
 // ================================================================
+//  Contract analytics
+// ================================================================
+
+#[test]
+fn test_analytics_track_deposit_and_withdrawal() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 3600;
+
+    vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+    let analytics = vault.get_analytics();
+    assert_eq!(analytics.deposits, 1);
+    assert_eq!(analytics.active_deposits, 1);
+
+    let token_analytics = vault.get_token_analytics(&token);
+    assert_eq!(token_analytics.deposited, 1_000);
+    assert_eq!(token_analytics.active_amount, 1_000);
+    assert_eq!(token_analytics.active_deposits, 1);
+
+    advance_time(&env, 3601);
+    vault.withdraw(&alice, &0);
+
+    let analytics = vault.get_analytics();
+    assert_eq!(analytics.withdrawals, 1);
+    assert_eq!(analytics.active_deposits, 0);
+    let token_analytics = vault.get_token_analytics(&token);
+    assert_eq!(token_analytics.withdrawn, 1_000);
+    assert_eq!(token_analytics.active_amount, 0);
+    assert_eq!(token_analytics.active_deposits, 0);
+}
+
+#[test]
+fn test_analytics_track_cancellation_and_penalty() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 3600;
+
+    vault.deposit(&alice, &token, &1_000, &unlock_time, &2_500);
+    vault.cancel_deposit(&alice, &0);
+
+    let analytics = vault.get_analytics();
+    assert_eq!(analytics.cancellations, 1);
+    assert_eq!(analytics.active_deposits, 0);
+    let token_analytics = vault.get_token_analytics(&token);
+    assert_eq!(token_analytics.cancelled, 1_000);
+    assert_eq!(token_analytics.penalties, 250);
+    assert_eq!(token_analytics.active_amount, 0);
+}
+
+#[test]
+fn test_analytics_track_emergency_withdrawal() {
+    let (env, vault, token, admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 3600;
+
+    vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+    vault.emergency_withdraw(&admin, &alice, &0);
+
+    let analytics = vault.get_analytics();
+    assert_eq!(analytics.emergency_withdrawals, 1);
+    assert_eq!(analytics.withdrawals, 0);
+    assert_eq!(analytics.active_deposits, 0);
+}
+
+// ================================================================
 //  deposit_by_ledger / withdraw_to / cancel_deposit — ledger path
 //  (fixes https://github.com/kenedybok3/SAFE-HAVEN/issues/10 and https://github.com/kenedybok3/SAFE-HAVEN/issues/11)
 // ================================================================

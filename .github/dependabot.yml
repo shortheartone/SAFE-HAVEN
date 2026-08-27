@@ -4,15 +4,58 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: UTC
+    open-pull-requests-limit: 5
     labels:
       - dependencies
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:30"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - rust
+    groups:
+      rust-production:
+        dependency-type: production
+        patterns:
+          - "*"
+      rust-development:
+        dependency-type: development
+        patterns:
+          - "*"
 
   - package-ecosystem: npm
     directory: /frontend
     schedule:
       interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: UTC
+    open-pull-requests-limit: 5
     labels:
       - dependencies
+      - javascript
+    groups:
+      frontend-production:
+        dependency-type: production
+        patterns:
+          - "*"
+      frontend-development:
+        dependency-type: development
+        patterns:
+          - "*"
 
 # Note: Dependabot does not support arbitrary binary downloads.
 # The stellar-cli version (STELLAR_CLI_VERSION in .github/workflows/ci.yml)
