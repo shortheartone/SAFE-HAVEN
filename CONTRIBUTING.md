@@ -92,6 +92,21 @@ pub fn some_fn(env: Env, depositor: Address) -> Result<(), VaultError> {
 
 This convention applies to any repeated host accessor (`env.ledger().sequence()`, `env.current_contract_address()`, etc.) â€” read once, store locally, reuse the binding.
 
+## Contributing to Documentation
+
+### FAQ
+
+The SAFE-HAVEN project maintains a comprehensive **[FAQ](./FAQ.md)** with answers to 28+ common questions about setup, usage, troubleshooting, and advanced topics.
+
+**How to contribute:**
+
+1. **Add a new Q&A**: Identify a gap in the FAQ (from Discord, issues, or support tickets) and write a clear question & answer
+2. **Improve an existing answer**: Clarify unclear answers, update code examples, add more detail
+3. **Report an error**: Found a broken link, outdated info, or typo? File an issue or PR with the fix
+4. **Suggest a topic**: Not sure how to write it? Open an issue with the topic and we'll help
+
+See [**FAQ_CONTRIBUTION_GUIDE.md**](./FAQ_CONTRIBUTION_GUIDE.md) for detailed instructions on format, accuracy guidelines, and the contribution process.
+
 ## Reporting Issues
 
 Before opening a new issue, please search existing issues to avoid duplicates.
@@ -100,6 +115,7 @@ Use the appropriate GitHub issue template:
 
 - **[Bug Report](https://github.com/kenedybok3/SAFE-HAVEN/issues/new?template=bug_report.md)** — for unexpected behaviour, crashes, or incorrect output. Include steps to reproduce, the actual result, and the expected result.
 - **[Feature Request](https://github.com/kenedybok3/SAFE-HAVEN/issues/new?template=feature_request.md)** — for new functionality or improvements. Describe the problem you are trying to solve and why the existing behaviour is insufficient.
+- **[Documentation](https://github.com/kenedybok3/SAFE-HAVEN/issues/new?labels=documentation)** — for FAQ improvements, broken links, or missing documentation
 
 Filling in the template fully helps maintainers triage and reproduce issues faster.
 

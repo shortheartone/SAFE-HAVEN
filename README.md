@@ -96,6 +96,10 @@ npm run dev            # -> http://localhost:5173
 
 See [`frontend/README.md`](./frontend/README.md) for the full frontend guide.
 
+**📖 Help & Support:**
+- [**FAQ**](./FAQ.md) — Answers to 28+ common questions (setup, usage, troubleshooting, advanced topics)
+- [**Contributing**](./CONTRIBUTING.md) & [**FAQ Contribution Guide**](./FAQ_CONTRIBUTION_GUIDE.md) — Help us improve documentation
+
 See [`DISASTER_RECOVERY.md`](./DISASTER_RECOVERY.md) for disaster scenarios, recovery procedures, roles, and escalation rules.
 
 See [`MONITORING.md`](./MONITORING.md) for contract health checks, alert thresholds, storage/TTL monitoring, and failed-transaction observability.
