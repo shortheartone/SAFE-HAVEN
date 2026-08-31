@@ -8,13 +8,11 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test:unit": "vitest run",
-    "test:unit:watch": "vitest",
-    "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui",
-    "lint": "eslint src --max-warnings 0",
-    "lint:fix": "eslint src --fix",
-    "typecheck": "tsc --noEmit"
+    "test": "playwright test",
+    "test:watch": "vitest",
+    "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "typecheck": "tsc --noEmit",
+    "test:ui": "playwright test --ui"
   },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "1.2.0",
@@ -27,8 +25,12 @@
   "devDependencies": {
     "@eslint/js": "9.9.0",
     "@playwright/test": "^1.62.0",
+    "fast-check": "3.22.0",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.5.2",
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",
+    "@types/speakeasy": "2.0.10",
     "@typescript-eslint/eslint-plugin": "7.13.0",
     "@typescript-eslint/parser": "7.13.0",
     "@vitejs/plugin-react": "4.3.1",

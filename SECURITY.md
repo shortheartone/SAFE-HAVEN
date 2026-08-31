@@ -1,8 +1,8 @@
 # Security Policy
 
-SAFE-HAVEN is a decentralized vault that holds real user funds on the Stellar network.
-A vulnerability in the smart contract can result in permanent, irreversible fund loss.
-We take every security report seriously and follow a rigorous coordinated-disclosure process.
+For handling and documenting confirmed incidents, see [INCIDENT_RESPONSE.md](./INCIDENT_RESPONSE.md).
+
+## Supported Versions
 
 ---
 
@@ -31,7 +31,9 @@ We take every security report seriously and follow a rigorous coordinated-disclo
 
 Security patches are only issued for the current latest release. If you are running an older deployment, upgrade before assuming you are protected.
 
----
+For operational response to contract vulnerabilities, state mismatches, and admin-key incidents, see the [Disaster Recovery Runbook](DISASTER_RECOVERY.md).
+
+The following are considered in-scope vulnerabilities:
 
 ## 2. Reporting a Vulnerability
 
