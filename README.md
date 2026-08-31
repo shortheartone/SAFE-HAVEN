@@ -100,6 +100,14 @@ See [`DISASTER_RECOVERY.md`](./DISASTER_RECOVERY.md) for disaster scenarios, rec
 
 See [`MONITORING.md`](./MONITORING.md) for contract health checks, alert thresholds, storage/TTL monitoring, and failed-transaction observability.
 
+See [`LEGAL.md`](./LEGAL.md) for Terms of Service, Privacy Policy, disclaimers, GDPR compliance, data retention policy, and the on-chain audit trail reference.
+
+See [`SUPPORT.md`](./SUPPORT.md) for the version lifecycle, maintenance and support matrix, bug-fix SLAs by severity, and EOL policy.
+
+See [`BRANCHING.md`](./BRANCHING.md) for the branching strategy, naming conventions, branch protection rules, release checklist, hotfix procedure, and rollback procedures.
+
+See [`POSTMORTEM.md`](./POSTMORTEM.md) for the incident post-mortem process, blameless culture guidelines, post-mortem template, action item tracking, and quarterly review process.
+
 Deployment artifacts are written to `deployments/<network>/<timestamp>/`, including raw and optimized WASM, contract ID, manifest, and checksum. Each deployment also updates `deploy_<network>.log` for CI compatibility. Soroban contracts are immutable, so rollback means deploying the retained previous WASM as a new contract and updating the frontend contract ID after verification.
 
 ---
