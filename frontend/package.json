@@ -23,6 +23,7 @@
     "react-hot-toast": "2.4.1"
   },
   "devDependencies": {
+    "@eslint/js": "9.9.0",
     "@playwright/test": "^1.62.0",
     "fast-check": "3.22.0",
     "@testing-library/react": "^16.3.0",
