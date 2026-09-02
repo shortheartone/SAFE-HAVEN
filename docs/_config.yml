@@ -1,0 +1,71 @@
+# Jekyll configuration for SAFE-HAVEN documentation site
+# Site is deployed to GitHub Pages via .github/workflows/docs.yml
+
+title: SAFE-HAVEN Documentation
+description: >
+  Production-ready decentralized vault on the Stellar blockchain (Soroban).
+  Lock tokens until a future timestamp with configurable early-exit penalties.
+baseurl: "/SAFE-HAVEN"
+url: "https://kenedybok3.github.io"
+
+# Theme
+# minima is available by default on GitHub Pages; no Gemfile needed
+theme: minima
+
+# Navigation (rendered by minima in the header)
+header_pages:
+  - index.md
+  - API.md
+  - TESTING_STRATEGY.md
+  - COMMUNICATION_PROCESS.md
+  - USER_ONBOARDING.md
+  - KNOWLEDGE_BASE_AND_FAQ.md
+  - ROADMAP.md
+
+# Plugins
+plugins:
+  - jekyll-relative-links
+
+relative_links:
+  enabled: true
+  collections: true
+
+# Markdown rendering
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+  toc_levels: 1..3
+
+# Exclude files that should not be rendered as pages
+exclude:
+  - adr/template.md
+  - proposals/TEMPLATE.md
+
+# Collections
+collections:
+  adr:
+    output: true
+    permalink: /adr/:name/
+
+# Default front matter for all docs pages
+defaults:
+  - scope:
+      path: ""
+      type: pages
+    values:
+      layout: default
+  - scope:
+      path: "adr"
+      type: adr
+    values:
+      layout: default
+
+# SEO and metadata
+author: SAFE-HAVEN Contributors
+twitter:
+  username: ""
+github_username: kenedybok3
+
+# Build settings
+show_excerpts: true
