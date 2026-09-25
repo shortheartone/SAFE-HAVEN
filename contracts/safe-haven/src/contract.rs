@@ -14,6 +14,7 @@ use crate::{
     events, storage,
     types::{
         DepositType, MultiTokenVaultEntry, TokenDeposit, VaultEntry, LedgerVaultEntry, Page,
+        DepositSummary, LedgerDepositSummary, DepositSummaryPage,
         STORAGE_VERSION, MAX_TOKENS_PER_DEPOSIT,
     },
 };
@@ -1757,6 +1758,93 @@ impl SafeHaven {
                     }
                     global_index = global_index.saturating_add(1);
                 }
+            }
+        }
+        results
+    }
+
+    /// Lightweight paginated query: returns deposit summaries (token, amount, unlock_time, penalty_bps).
+    /// Reduces gas consumption compared to `get_deposits_page` by omitting optional fields
+    /// like compound_frequency_secs and last_accrual_timestamp.
+    /// Equivalent to `get_deposits_page` but returns DepositSummary instead of full VaultEntry.
+    pub fn get_deposits_summary(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<(Address, u32, DepositSummary)> {
+        let mut results: Vec<(Address, u32, DepositSummary)> = Vec::new(&env);
+        let mut global_index: u32 = 0;
+        let end_at = offset.saturating_add(limit);
+
+        let depositor_list = storage::get_all_depositors_raw(&env);
+        for depositor in depositor_list.iter() {
+            if global_index >= end_at {
+                break;
+            }
+            if !storage::depositor_is_active(&env, &depositor) {
+                continue;
+            }
+            let ids = storage::get_deposit_ids(&env, &depositor);
+            for id in ids.iter() {
+                if global_index >= end_at {
+                    break;
+                }
+                if let Some(entry) = storage::get_deposit_readonly(&env, &depositor, id) {
+                    if global_index >= offset {
+                        let summary = DepositSummary {
+                            token: entry.token,
+                            amount: entry.amount,
+                            unlock_time: entry.unlock_time,
+                            penalty_bps: entry.penalty_bps,
+                        };
+                        results.push_back((depositor.clone(), id, summary));
+                    }
+                    global_index = global_index.saturating_add(1);
+                }
+            }
+        }
+        results
+    }
+
+    /// Lightweight single-deposit query: returns a DepositSummary.
+    /// Reduces gas compared to `get_vault` for callers that only need basic info.
+    pub fn get_deposit_summary(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Option<DepositSummary> {
+        storage::get_deposit_readonly(&env, &depositor, deposit_id).map(|entry| DepositSummary {
+            token: entry.token,
+            amount: entry.amount,
+            unlock_time: entry.unlock_time,
+            penalty_bps: entry.penalty_bps,
+        })
+    }
+
+    /// Lightweight batch query: returns deposit summaries for multiple (depositor, deposit_id) pairs.
+    /// Clamped to MAX_BATCH_SIZE (25) entries per call.
+    /// Reduces gas compared to `get_vault_batch` when full VaultEntry is not needed.
+    pub fn get_vault_batch_summary(
+        env: Env,
+        depositors: Vec<Address>,
+        deposit_id: u32,
+    ) -> Vec<Option<DepositSummary>> {
+        let limit = if depositors.len() > MAX_BATCH_SIZE {
+            MAX_BATCH_SIZE
+        } else {
+            depositors.len()
+        };
+        let mut results = Vec::new(&env);
+        for i in 0..limit {
+            if let Some(depositor) = depositors.get(i) {
+                let entry = storage::get_deposit_readonly(&env, &depositor, deposit_id);
+                let summary = entry.map(|e| DepositSummary {
+                    token: e.token,
+                    amount: e.amount,
+                    unlock_time: e.unlock_time,
+                    penalty_bps: e.penalty_bps,
+                });
+                results.push_back(summary);
             }
         }
         results

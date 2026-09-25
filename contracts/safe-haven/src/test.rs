@@ -4761,3 +4761,394 @@ fn test_emergency_withdrawal_mixed_deposit_types_same_ledger() {
     let total = vault.get_emergency_withdrawal_total(&env, env.ledger().sequence());
     assert_eq!(total, 50_000);
 }
+
+
+// ================================================================
+//  Lightweight Query Variants (Task 5: Gas Optimization)
+// ================================================================
+
+/// get_deposit_summary returns a minimal DepositSummary with only essential fields.
+#[test]
+fn test_get_deposit_summary_basic() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &500);
+
+    let summary = vault.get_deposit_summary(&alice, &deposit_id);
+    assert!(summary.is_some());
+
+    let s = summary.unwrap();
+    assert_eq!(s.token, token);
+    assert_eq!(s.amount, 1_000);
+    assert_eq!(s.unlock_time, unlock);
+    assert_eq!(s.penalty_bps, 500);
+}
+
+/// get_deposit_summary returns None for non-existent deposits.
+#[test]
+fn test_get_deposit_summary_nonexistent() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let summary = vault.get_deposit_summary(&alice, &999);
+    assert_eq!(summary, None);
+}
+
+/// get_deposit_summary returns correct data after withdrawal (None).
+#[test]
+fn test_get_deposit_summary_after_withdrawal() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+
+    advance_time(&env, 3601);
+    vault.withdraw(&alice, &deposit_id);
+
+    let summary = vault.get_deposit_summary(&alice, &deposit_id);
+    assert_eq!(summary, None);
+}
+
+/// get_deposits_summary returns an empty vec for an empty contract.
+#[test]
+fn test_get_deposits_summary_empty() {
+    let (_env, vault, _token, _admin, _alice, _fee) = setup();
+    let summaries = vault.get_deposits_summary(&0, &10);
+    assert_eq!(summaries.len(), 0);
+}
+
+/// get_deposits_summary returns summary records for all deposits in the first page.
+#[test]
+fn test_get_deposits_summary_single_depositor() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &50_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &1_000, &unlock, &100);
+    vault.deposit(&alice, &token, &2_000, &unlock, &200);
+
+    let summaries = vault.get_deposits_summary(&0, &10);
+    assert_eq!(summaries.len(), 2);
+
+    // First deposit
+    let (addr1, id1, s1) = summaries.get(0).unwrap();
+    assert_eq!(addr1, alice);
+    assert_eq!(id1, 0u32);
+    assert_eq!(s1.amount, 1_000);
+    assert_eq!(s1.penalty_bps, 100);
+
+    // Second deposit
+    let (addr2, id2, s2) = summaries.get(1).unwrap();
+    assert_eq!(addr2, alice);
+    assert_eq!(id2, 1u32);
+    assert_eq!(s2.amount, 2_000);
+    assert_eq!(s2.penalty_bps, 200);
+}
+
+/// get_deposits_summary respects pagination (offset and limit).
+#[test]
+fn test_get_deposits_summary_pagination() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &50_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &100, &unlock, &0);
+    vault.deposit(&alice, &token, &200, &unlock, &0);
+    vault.deposit(&alice, &token, &300, &unlock, &0);
+
+    let page0 = vault.get_deposits_summary(&0, &2);
+    assert_eq!(page0.len(), 2);
+    assert_eq!(page0.get(0).unwrap().2.amount, 100);
+    assert_eq!(page0.get(1).unwrap().2.amount, 200);
+
+    let page1 = vault.get_deposits_summary(&2, &2);
+    assert_eq!(page1.len(), 1);
+    assert_eq!(page1.get(0).unwrap().2.amount, 300);
+
+    let page2 = vault.get_deposits_summary(&3, &10);
+    assert_eq!(page2.len(), 0);
+}
+
+/// get_deposits_summary works across multiple depositors.
+#[test]
+fn test_get_deposits_summary_multiple_depositors() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let bob: Address = Address::generate(&env);
+    StellarAssetClient::new(&env, &token).mint(&alice, &5_000);
+    StellarAssetClient::new(&env, &token).mint(&bob, &5_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &1_000, &unlock, &100);
+    vault.deposit(&bob, &token, &2_000, &unlock, &200);
+
+    let summaries = vault.get_deposits_summary(&0, &10);
+    assert_eq!(summaries.len(), 2);
+
+    // Verify both depositors' records are present
+    let addresses: Vec<Address> = summaries.iter().map(|(addr, _, _)| addr.clone()).collect();
+    assert!(addresses.contains(&alice));
+    assert!(addresses.contains(&bob));
+
+    // Verify amounts
+    let amounts: Vec<i128> = summaries.iter().map(|(_, _, s)| s.amount).collect();
+    assert!(amounts.contains(&1_000));
+    assert!(amounts.contains(&2_000));
+}
+
+/// get_vault_batch_summary returns summaries for multiple (depositor, deposit_id) pairs.
+#[test]
+fn test_get_vault_batch_summary_basic() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let bob: Address = Address::generate(&env);
+    StellarAssetClient::new(&env, &token).mint(&alice, &5_000);
+    StellarAssetClient::new(&env, &token).mint(&bob, &5_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &1_000, &unlock, &100);
+    vault.deposit(&bob, &token, &2_000, &unlock, &200);
+
+    let mut depositors = Vec::new(&env);
+    depositors.push_back(alice.clone());
+    depositors.push_back(bob.clone());
+
+    let summaries = vault.get_vault_batch_summary(&depositors, &0);
+    assert_eq!(summaries.len(), 2);
+
+    let s1 = summaries.get(0).unwrap();
+    assert!(s1.is_some());
+    assert_eq!(s1.unwrap().amount, 1_000);
+
+    let s2 = summaries.get(1).unwrap();
+    assert!(s2.is_some());
+    assert_eq!(s2.unwrap().amount, 2_000);
+}
+
+/// get_vault_batch_summary returns None for non-existent deposits.
+#[test]
+fn test_get_vault_batch_summary_nonexistent() {
+    let (env, vault, _token, _admin, alice, _fee) = setup();
+    let bob: Address = Address::generate(&env);
+
+    let mut depositors = Vec::new(&env);
+    depositors.push_back(alice);
+    depositors.push_back(bob);
+
+    let summaries = vault.get_vault_batch_summary(&depositors, &0);
+    assert_eq!(summaries.len(), 2);
+
+    // Both should be None (no deposits created)
+    assert_eq!(summaries.get(0).unwrap(), None);
+    assert_eq!(summaries.get(1).unwrap(), None);
+}
+
+/// get_vault_batch_summary respects MAX_BATCH_SIZE limit (25 entries).
+#[test]
+fn test_get_vault_batch_summary_respects_limit() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock = env.ledger().timestamp() + 3600;
+
+    // Create a batch larger than MAX_BATCH_SIZE
+    let mut depositors = Vec::new(&env);
+    for i in 0..30 {
+        let addr: Address = Address::generate(&env);
+        StellarAssetClient::new(&env, &token).mint(&addr, &1_000);
+        vault.deposit(&addr, &token, &100 * (i as i128 + 1), &unlock, &0);
+        depositors.push_back(addr);
+    }
+
+    let summaries = vault.get_vault_batch_summary(&depositors, &0);
+    // Should be clamped to MAX_BATCH_SIZE
+    assert_eq!(summaries.len(), 25);
+}
+
+/// get_deposit_summary and get_vault return matching data (data accuracy).
+#[test]
+fn test_get_deposit_summary_matches_get_vault() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &500);
+
+    // Fetch using full query
+    let full = vault.get_vault(&alice, &deposit_id);
+    assert!(full.is_some());
+    let full_entry = full.unwrap();
+
+    // Fetch using lightweight query
+    let summary = vault.get_deposit_summary(&alice, &deposit_id);
+    assert!(summary.is_some());
+    let s = summary.unwrap();
+
+    // Verify all fields match
+    assert_eq!(s.token, full_entry.token);
+    assert_eq!(s.amount, full_entry.amount);
+    assert_eq!(s.unlock_time, full_entry.unlock_time);
+    assert_eq!(s.penalty_bps, full_entry.penalty_bps);
+}
+
+/// get_deposits_summary and get_deposits_page return matching data (data accuracy).
+#[test]
+fn test_get_deposits_summary_matches_get_deposits_page() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &50_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &1_000, &unlock, &100);
+    vault.deposit(&alice, &token, &2_000, &unlock, &200);
+
+    // Fetch using full query
+    let full_page = vault.get_deposits_page(&0, &10);
+    assert_eq!(full_page.len(), 2);
+
+    // Fetch using lightweight query
+    let summary_page = vault.get_deposits_summary(&0, &10);
+    assert_eq!(summary_page.len(), 2);
+
+    // Verify matching data
+    for i in 0..2 {
+        let (addr_full, id_full, full_entry) = full_page.get(i).unwrap();
+        let (addr_summary, id_summary, summary) = summary_page.get(i).unwrap();
+
+        assert_eq!(addr_full, addr_summary);
+        assert_eq!(id_full, id_summary);
+        assert_eq!(summary.token, full_entry.token);
+        assert_eq!(summary.amount, full_entry.amount);
+        assert_eq!(summary.unlock_time, full_entry.unlock_time);
+        assert_eq!(summary.penalty_bps, full_entry.penalty_bps);
+    }
+}
+
+/// get_vault_batch_summary and get_vault_batch return matching summary data.
+#[test]
+fn test_get_vault_batch_summary_matches_get_vault_batch() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let bob: Address = Address::generate(&env);
+    StellarAssetClient::new(&env, &token).mint(&alice, &5_000);
+    StellarAssetClient::new(&env, &token).mint(&bob, &5_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &1_000, &unlock, &100);
+    vault.deposit(&bob, &token, &2_000, &unlock, &200);
+
+    let mut depositors = Vec::new(&env);
+    depositors.push_back(alice.clone());
+    depositors.push_back(bob.clone());
+
+    // Fetch using full query
+    let full_batch = vault.get_vault_batch(&depositors, &0);
+    assert_eq!(full_batch.len(), 2);
+
+    // Fetch using lightweight query
+    let summary_batch = vault.get_vault_batch_summary(&depositors, &0);
+    assert_eq!(summary_batch.len(), 2);
+
+    // Verify matching data
+    for i in 0..2 {
+        let full_opt = full_batch.get(i).unwrap();
+        let summary_opt = summary_batch.get(i).unwrap();
+
+        assert!(full_opt.is_some());
+        assert!(summary_opt.is_some());
+
+        let full_entry = full_opt.unwrap();
+        let summary = summary_opt.unwrap();
+
+        assert_eq!(summary.token, full_entry.token);
+        assert_eq!(summary.amount, full_entry.amount);
+        assert_eq!(summary.unlock_time, full_entry.unlock_time);
+        assert_eq!(summary.penalty_bps, full_entry.penalty_bps);
+    }
+}
+
+/// Lightweight queries correctly handle withdrawn deposits (should be None).
+#[test]
+fn test_get_deposits_summary_excludes_withdrawn() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &1_000, &unlock, &0);
+    vault.deposit(&alice, &token, &2_000, &unlock, &0);
+
+    advance_time(&env, 3601);
+    vault.withdraw(&alice, &0);
+
+    let summaries = vault.get_deposits_summary(&0, &10);
+    // Only the second deposit should remain
+    assert_eq!(summaries.len(), 1);
+    let (_, id, s) = summaries.get(0).unwrap();
+    assert_eq!(id, 1u32);
+    assert_eq!(s.amount, 2_000);
+}
+
+/// get_deposit_summary correctly handles various penalty_bps values.
+#[test]
+fn test_get_deposit_summary_various_penalties() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &50_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+
+    // Test different penalty levels
+    let penalties = [0u32, 100, 1000, 5000, 10000];
+    for (idx, &penalty) in penalties.iter().enumerate() {
+        vault.deposit(&alice, &token, &1_000, &unlock, &penalty);
+        let summary = vault.get_deposit_summary(&alice, &(idx as u32));
+        assert_eq!(summary.unwrap().penalty_bps, penalty);
+    }
+}
+
+/// get_deposits_summary correctly handles large amounts and various unlock times.
+#[test]
+fn test_get_deposits_summary_various_amounts_and_times() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &5_000_000_000);
+
+    let base_time = env.ledger().timestamp();
+
+    // Test different amounts and times
+    let amounts = [100i128, 10_000, 1_000_000, 100_000_000];
+    for (idx, &amount) in amounts.iter().enumerate() {
+        let unlock = base_time + 3600 + (idx as u64 * 1000);
+        vault.deposit(&alice, &token, &amount, &unlock, &0);
+        let summary = vault.get_deposit_summary(&alice, &(idx as u32));
+        let s = summary.unwrap();
+        assert_eq!(s.amount, amount);
+        assert_eq!(s.unlock_time, unlock);
+    }
+}
+
+/// Test that lightweight queries preserve token contract addresses exactly.
+#[test]
+fn test_get_deposit_summary_preserves_token_address() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &1_000, &unlock, &0);
+
+    let summary = vault.get_deposit_summary(&alice, &0);
+    assert_eq!(summary.unwrap().token, token);
+
+    // Verify it matches the full entry's token
+    let full = vault.get_vault(&alice, &0);
+    assert_eq!(summary.unwrap().token, full.unwrap().token);
+}
+
+/// get_deposits_summary handles the case where a depositor has multiple deposits correctly.
+#[test]
+fn test_get_deposits_summary_multiple_deposits_per_depositor() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &100_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+
+    // Create 5 deposits from the same depositor
+    for i in 0..5 {
+        vault.deposit(&alice, &token, &(1_000 * (i + 1)), &unlock, &(i * 100));
+    }
+
+    let summaries = vault.get_deposits_summary(&0, &10);
+    assert_eq!(summaries.len(), 5);
+
+    // Verify all are from alice and have correct data
+    for i in 0..5 {
+        let (addr, id, s) = summaries.get(i).unwrap();
+        assert_eq!(addr, alice);
+        assert_eq!(id, i as u32);
+        assert_eq!(s.amount, 1_000 * (i as i128 + 1));
+        assert_eq!(s.penalty_bps, i as u32 * 100);
+    }
+}

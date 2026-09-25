@@ -33,13 +33,6 @@ pub struct DepositRequest {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DepositType {
-    TimeBased,
-    LedgerBased,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VaultKey {
     Deposit(Address, u32),
     DepositByLedger(Address, u32),
@@ -160,10 +153,33 @@ pub struct StakerEntry {
     pub stake_amount: i128,
 }
 
-/// Deposit type indicator — distinguishes between timestamp-based and ledger-based deposits
+/// Lightweight summary of a deposit containing only essential information.
+/// Used to reduce gas costs for read operations that don't need full VaultEntry details.
+/// Fields match corresponding VaultEntry fields for consistency.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DepositType {
-    TimeBased,
-    LedgerBased,
+pub struct DepositSummary {
+    /// Token contract address
+    pub token: Address,
+    /// Locked amount in smallest units
+    pub amount: i128,
+    /// Unlock timestamp (seconds since epoch)
+    pub unlock_time: u64,
+    /// Early-exit penalty in basis points (0-10000)
+    pub penalty_bps: u32,
+}
+
+/// Lightweight summary of a ledger-based deposit.
+/// Contains only essential information for reduced gas costs.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LedgerDepositSummary {
+    /// Token contract address
+    pub token: Address,
+    /// Locked amount in smallest units
+    pub amount: i128,
+    /// Unlock ledger sequence number
+    pub unlock_ledger: u32,
+    /// Early-exit penalty in basis points (0-10000)
+    pub penalty_bps: u32,
 }

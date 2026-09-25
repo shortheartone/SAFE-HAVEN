@@ -136,6 +136,24 @@ export async function getVault(depositor: string, depositId: number): Promise<Va
   )
 }
 
+/** Fetch a lightweight deposit summary (reduced gas) */
+export async function getDepositSummary(
+  depositor: string,
+  depositId: number,
+): Promise<VaultEntry | null> {
+  return simulateReadOnly(
+    'get_deposit_summary',
+    [
+      new Address(depositor).toScVal(),
+      nativeToScVal(depositId, { type: 'u32' }),
+    ],
+    (v) => {
+      if (v.switch() === xdr.ScValType.scvVoid()) return null
+      return parseVaultEntry(v)
+    },
+  )
+}
+
 /** Fetch multiple deposits for a single depositor in one RPC call (batch fetch) */
 export async function getDepositBatch(
   depositor: string,
@@ -173,6 +191,41 @@ export async function getDepositBatch(
   ).then((result) => result ?? [])
 }
 
+/** Fetch lightweight summaries for multiple (depositor, deposit_id) pairs (reduced gas) */
+export async function getVaultBatchSummary(
+  depositors: string[],
+  depositId: number,
+): Promise<{ depositor: string; entry: VaultEntry | null }[]> {
+  return simulateReadOnly(
+    'get_vault_batch_summary',
+    [
+      nativeToScVal(depositors.map((d) => new Address(d).toScVal()), { type: 'Vec<Address>' }),
+      nativeToScVal(depositId, { type: 'u32' }),
+    ],
+    (v) => {
+      const result = scValToNative(v) as Array<Record<string, unknown> | null>
+      return result.map((item, idx) => {
+        let entry: VaultEntry | null = null
+        if (item) {
+          try {
+            const raw = item as Record<string, unknown>
+            entry = {
+              token: raw['token'] as string,
+              amount: BigInt(raw['amount'] as string | number),
+              unlockTime: Number(raw['unlock_time']),
+              depositor: raw['depositor'] as string,
+              penaltyBps: Number(raw['penalty_bps']),
+            }
+          } catch {
+            entry = null
+          }
+        }
+        return { depositor: depositors[idx], entry }
+      })
+    },
+  ).then((result) => result ?? [])
+}
+
 /** Fetch all deposit IDs for an address */
 export async function getDepositIds(depositor: string): Promise<number[]> {
   const result = await simulateReadOnly(
@@ -181,6 +234,36 @@ export async function getDepositIds(depositor: string): Promise<number[]> {
     (v) => scValToNative(v) as number[],
   )
   return result ?? []
+}
+
+/** Fetch lightweight deposit summaries with pagination (reduced gas) */
+export async function getDepositsSummary(
+  offset: number,
+  limit: number,
+): Promise<{ depositor: string; depositId: number; entry: VaultEntry }[]> {
+  return simulateReadOnly(
+    'get_deposits_summary',
+    [
+      nativeToScVal(offset, { type: 'u32' }),
+      nativeToScVal(limit, { type: 'u32' }),
+    ],
+    (v) => {
+      const result = scValToNative(v) as Array<Record<string, unknown>>
+      return result.map((item) => {
+        const depositor = item[0] as string
+        const depositId = Number(item[1]) as number
+        const entryRaw = item[2] as Record<string, unknown>
+        const entry: VaultEntry = {
+          token: entryRaw['token'] as string,
+          amount: BigInt(entryRaw['amount'] as string | number),
+          unlockTime: Number(entryRaw['unlock_time']),
+          depositor,
+          penaltyBps: Number(entryRaw['penalty_bps']),
+        }
+        return { depositor, depositId, entry }
+      })
+    },
+  ).then((result) => result ?? [])
 }
 
 /** Fetch time remaining in seconds */

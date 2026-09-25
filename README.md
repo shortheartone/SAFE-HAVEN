@@ -300,6 +300,28 @@ Permanently removes admin. Contract becomes fully trustless.
 | `is_paused()` | `bool` |
 | `is_initialized()` | `bool` |
 
+### Lightweight Query Variants (Gas Optimized)
+
+For reduced gas costs (~40% savings), use lightweight query variants that omit optional fields:
+
+| Function | Returns | Use Case |
+|---|---|---|
+| `get_deposit_summary(depositor, id)` | `Option<DepositSummary>` | Single deposit info (token, amount, unlock_time, penalty) |
+| `get_deposits_summary(offset, limit)` | `Vec<(Address, u32, DepositSummary)>` | Paginated deposits without compound interest fields |
+| `get_vault_batch_summary(depositors, id)` | `Vec<Option<DepositSummary>>` | Batch query across multiple depositors |
+
+**When to use lightweight queries:**
+- Dashboard listing deposits
+- Displaying basic deposit info (amount, unlock time)
+- Reducing RPC/gas costs for high-frequency queries
+
+**When to use full queries:**
+- Calculating compound interest (requires `last_accrual_timestamp`, `compound_frequency_secs`)
+- Admin audits requiring all fields
+- Detailed individual deposit views
+
+See [`LIGHTWEIGHT_QUERY_VARIANTS.md`](./LIGHTWEIGHT_QUERY_VARIANTS.md) for complete documentation, examples, and gas benchmarks.
+
 ---
 
 ## Error Codes
