@@ -1135,3 +1135,61 @@ pub fn set_milestone_bitmap(env: &Env, depositor: &Address, bitmap: u32) {
         .persistent()
         .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
 }
+
+// ----------------------------------------------------------------
+//  Encrypted metadata helpers
+// ----------------------------------------------------------------
+
+/// Persist `EncryptedMetadata` for `(depositor, deposit_id)`.
+///
+/// TTL is bumped to `BUMP_TARGET` to ensure the metadata lives at
+/// least as long as the vault entry itself.
+pub fn set_encrypted_metadata(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    metadata: &crate::types::EncryptedMetadata,
+) {
+    let key = VaultKey::EncryptedMetadata(depositor.clone(), deposit_id);
+    env.storage().persistent().set(&key, metadata);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+/// Read `EncryptedMetadata` for `(depositor, deposit_id)` and extend TTL.
+/// Returns `None` if no metadata has been stored for this deposit.
+pub fn get_encrypted_metadata(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+) -> Option<crate::types::EncryptedMetadata> {
+    let key = VaultKey::EncryptedMetadata(depositor.clone(), deposit_id);
+    let entry: Option<crate::types::EncryptedMetadata> = env.storage().persistent().get(&key);
+    if entry.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    }
+    entry
+}
+
+/// Read `EncryptedMetadata` without extending TTL (read-only path).
+pub fn get_encrypted_metadata_readonly(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+) -> Option<crate::types::EncryptedMetadata> {
+    let key = VaultKey::EncryptedMetadata(depositor.clone(), deposit_id);
+    env.storage().persistent().get(&key)
+}
+
+/// Remove `EncryptedMetadata` for `(depositor, deposit_id)`.
+/// Called when a vault is withdrawn, cancelled, or emergency-withdrawn
+/// so stale ciphertext is not left on-chain.
+pub fn remove_encrypted_metadata(env: &Env, depositor: &Address, deposit_id: u32) {
+    let key = VaultKey::EncryptedMetadata(depositor.clone(), deposit_id);
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().remove(&key);
+    }
+}

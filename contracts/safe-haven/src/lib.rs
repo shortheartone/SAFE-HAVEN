@@ -23,7 +23,8 @@ pub use constants::{
 };
 
 pub use types::{
-    DepositType, MultiTokenVaultEntry, Page, TokenDeposit, STORAGE_VERSION, MAX_TOKENS_PER_DEPOSIT,
+    DepositType, EncryptedMetadata, MultiTokenVaultEntry, Page, TokenDeposit,
+    STORAGE_VERSION, MAX_TOKENS_PER_DEPOSIT, MAX_METADATA_BYTES,
 };
 
 pub use contract::SafeHaven;

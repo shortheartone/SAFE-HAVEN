@@ -13,8 +13,8 @@ use crate::{
     errors::VaultError,
     events, storage,
     types::{
-        DepositType, MultiTokenVaultEntry, TokenDeposit, VaultEntry, LedgerVaultEntry, Page,
-        STORAGE_VERSION, MAX_TOKENS_PER_DEPOSIT,
+        DepositType, EncryptedMetadata, MultiTokenVaultEntry, TokenDeposit, VaultEntry,
+        LedgerVaultEntry, Page, STORAGE_VERSION, MAX_TOKENS_PER_DEPOSIT, MAX_METADATA_BYTES,
     },
 };
 
@@ -103,6 +103,132 @@ fn check_whitelist(
         return Err(VaultError::RecipientNotWhitelisted);
     }
     Ok(())
+}
+
+// ----------------------------------------------------------------
+//  Internal crypto helpers (HMAC-CTR encryption scheme)
+// ----------------------------------------------------------------
+//
+// Soroban SDK v22 exposes only `env.crypto().sha256()`, so we build
+// an authenticated XOR-stream cipher from it.
+//
+// Algorithm overview:
+//
+//   nonce         = SHA256(seq_le4 || id_le4)[0..8]
+//   keystream_blk(i) = SHA256(key_32 || nonce_8 || i_le4)
+//   ciphertext[j] = plaintext[j] XOR keystream_blk(j/32)[j%32]
+//   auth_tag      = SHA256(key_32 || nonce_8 || ciphertext)
+//
+// Security: XOR-stream gives semantic security when the keystream is
+// pseudorandom (SHA256 is a suitable PRF for this application).
+// The auth_tag provides ciphertext integrity.  Both must hold for the
+// scheme to be secure.
+
+/// Derive an 8-byte nonce from `(ledger_sequence, deposit_id)`.
+///
+/// `nonce = SHA256(seq_le4 || id_le4)[0..8]`
+///
+/// Using the ledger sequence + deposit ID makes the nonce unique per
+/// deposit-per-ledger, preventing nonce reuse across encryptions.
+fn derive_nonce(
+    env: &Env,
+    ledger_seq: u32,
+    deposit_id: u32,
+) -> soroban_sdk::BytesN<8> {
+    // Build 8-byte input: [seq_le4, id_le4]
+    let mut input = soroban_sdk::Bytes::new(env);
+    append_u32_le(env, &mut input, ledger_seq);
+    append_u32_le(env, &mut input, deposit_id);
+
+    // Hash to get 32 bytes, take first 8
+    let hash = env.crypto().sha256(&input);
+    let hash_bytes: soroban_sdk::Bytes = hash.into();
+
+    // Slice first 8 bytes
+    let mut nonce_bytes = soroban_sdk::Bytes::new(env);
+    for i in 0u32..8u32 {
+        nonce_bytes.push_back(hash_bytes.get(i).unwrap_or(0));
+    }
+    soroban_sdk::BytesN::try_from(nonce_bytes)
+        .unwrap_or_else(|_| soroban_sdk::BytesN::from_array(env, &[0u8; 8]))
+}
+
+/// Produce one 32-byte keystream block for counter `block_idx`.
+///
+/// `block = SHA256(key_32 || nonce_8 || block_idx_le4)`
+fn keystream_block(
+    env: &Env,
+    key: &soroban_sdk::BytesN<32>,
+    nonce: &soroban_sdk::BytesN<8>,
+    block_idx: u32,
+) -> soroban_sdk::Bytes {
+    let mut input = soroban_sdk::Bytes::new(env);
+    // Append key (32 bytes)
+    let key_bytes: soroban_sdk::Bytes = key.clone().into();
+    input.append(&key_bytes);
+    // Append nonce (8 bytes)
+    let nonce_bytes: soroban_sdk::Bytes = nonce.clone().into();
+    input.append(&nonce_bytes);
+    // Append block counter as 4-byte little-endian
+    append_u32_le(env, &mut input, block_idx);
+
+    env.crypto().sha256(&input).into()
+}
+
+/// XOR `data` with the keystream derived from `(key, nonce)`.
+/// This function is its own inverse (applying it twice returns the original).
+fn xor_stream_encrypt(
+    env: &Env,
+    key: &soroban_sdk::BytesN<32>,
+    nonce: &soroban_sdk::BytesN<8>,
+    data: &soroban_sdk::Bytes,
+) -> soroban_sdk::Bytes {
+    let len = data.len();
+    if len == 0 {
+        return soroban_sdk::Bytes::new(env);
+    }
+
+    let mut output = soroban_sdk::Bytes::new(env);
+    let num_blocks = len.saturating_add(31) / 32; // ceil(len / 32)
+
+    for block_idx in 0..num_blocks {
+        let ks = keystream_block(env, key, nonce, block_idx);
+        let block_start = block_idx.saturating_mul(32);
+        let block_end = len.min(block_start.saturating_add(32));
+
+        for byte_pos in block_start..block_end {
+            let plain_byte = data.get(byte_pos).unwrap_or(0);
+            let ks_byte = ks.get(byte_pos.saturating_sub(block_start)).unwrap_or(0);
+            output.push_back(plain_byte ^ ks_byte);
+        }
+    }
+
+    output
+}
+
+/// Compute `SHA256(key || nonce || ciphertext)` as the authentication tag.
+fn compute_auth_tag(
+    env: &Env,
+    key: &soroban_sdk::BytesN<32>,
+    nonce: &soroban_sdk::BytesN<8>,
+    ciphertext: &soroban_sdk::Bytes,
+) -> soroban_sdk::BytesN<32> {
+    let mut input = soroban_sdk::Bytes::new(env);
+    let key_bytes: soroban_sdk::Bytes = key.clone().into();
+    input.append(&key_bytes);
+    let nonce_bytes: soroban_sdk::Bytes = nonce.clone().into();
+    input.append(&nonce_bytes);
+    input.append(ciphertext);
+    env.crypto().sha256(&input)
+}
+
+/// Append `val` as a 4-byte little-endian sequence to `buf`.
+fn append_u32_le(env: &Env, buf: &mut soroban_sdk::Bytes, val: u32) {
+    let _ = env; // env unused here but kept for signature consistency
+    buf.push_back((val & 0xFF) as u8);
+    buf.push_back(((val >> 8) & 0xFF) as u8);
+    buf.push_back(((val >> 16) & 0xFF) as u8);
+    buf.push_back(((val >> 24) & 0xFF) as u8);
 }
 
 #[contractimpl]
@@ -2600,5 +2726,227 @@ impl SafeHaven {
     /// Returns the `InsuranceClaim` for `claim_id`, or `None` if not found.
     pub fn get_claim(env: Env, claim_id: u32) -> Option<InsuranceClaim> {
         storage::get_claim_readonly(&env, claim_id)
+    }
+
+    // ----------------------------------------------------------------
+    //  Encrypted Metadata
+    // ----------------------------------------------------------------
+    //
+    // ## Design
+    //
+    // Encrypted metadata is stored SEPARATELY from the VaultEntry so that
+    // existing deposits are unaffected.  Storage key: VaultKey::EncryptedMetadata(depositor, id).
+    //
+    // ## Encryption scheme: HMAC-CTR (XOR-stream with SHA256 PRF)
+    //
+    // The Soroban WASM sandbox provides no AES or ChaCha20 primitives, only
+    // `env.crypto().sha256()`.  We build an authenticated XOR-stream cipher:
+    //
+    //   keystream_block(i) = SHA256(key_32 || nonce_8 || i_le_4)
+    //   ciphertext[i]      = plaintext[i] XOR keystream_block(i / 32)[i % 32]
+    //   auth_tag           = SHA256(key_32 || nonce_8 || ciphertext)
+    //
+    // Nonce is derived from (ledger_sequence, deposit_id):
+    //   nonce = SHA256(seq_le_4 || id_le_4)[0..8]   (first 8 bytes)
+    //
+    // Verification: auth_tag recomputed from stored (key, nonce, ciphertext)
+    // before decryption; mismatch → DecryptionFailed without leaking plaintext.
+    //
+    // ## Security properties
+    //
+    // * Confidentiality: plaintext XOR-masked; key required to recover.
+    // * Integrity:       MAC tag detects any ciphertext bit-flip.
+    // * Auth-first:      require_auth() is the FIRST call in all three functions.
+    // * Key never stored: caller supplies key bytes every invocation.
+    // * Nonce freshness: changes on every re-encryption (new ledger sequence).
+    // * Key rotation:    atomic decrypt-with-old / encrypt-with-new.
+    //
+    // ## Limitations
+    //
+    // * Not IND-CCA2; equivalent to HMAC-CTR with SHA256 PRF.
+    // * Max plaintext: MAX_METADATA_BYTES (512 bytes).
+    // * Key must be exactly 32 bytes (BytesN<32>).
+
+    /// Encrypt `plaintext` metadata for `(depositor, deposit_id)` and store it on-chain.
+    ///
+    /// The `key` is a 32-byte caller-supplied secret. It is NEVER stored on-chain.
+    ///
+    /// # Authentication
+    /// `depositor.require_auth()` is called first.  The depositor must have an
+    /// active vault entry (`NoDepositFound` otherwise).
+    ///
+    /// # Errors
+    /// * `NoDepositFound`   — no vault entry exists for `(depositor, deposit_id)`.
+    /// * `MetadataTooLarge` — `plaintext` exceeds `MAX_METADATA_BYTES` (512 bytes).
+    ///
+    /// # Events
+    /// Emits `MetadataEncrypted(depositor, deposit_id, ciphertext_len, ledger)`.
+    pub fn encrypt_metadata(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+        key: soroban_sdk::BytesN<32>,
+        plaintext: soroban_sdk::Bytes,
+    ) -> Result<(), VaultError> {
+        // Auth-first: depositor must sign
+        depositor.require_auth();
+
+        // Validate a vault entry exists (so we can't encrypt for a nonexistent deposit)
+        let deposit_exists = storage::get_deposit_readonly(&env, &depositor, deposit_id).is_some()
+            || storage::get_deposit_by_ledger_readonly(&env, &depositor, deposit_id).is_some()
+            || storage::get_multi_deposit_readonly(&env, &depositor, deposit_id).is_some();
+        if !deposit_exists {
+            return Err(VaultError::NoDepositFound);
+        }
+
+        // Validate plaintext size
+        if plaintext.len() > MAX_METADATA_BYTES {
+            return Err(VaultError::MetadataTooLarge);
+        }
+
+        let ledger_seq = env.ledger().sequence();
+
+        // Derive nonce: SHA256(seq_le4 || id_le4)[0..8]
+        let nonce = derive_nonce(&env, ledger_seq, deposit_id);
+
+        // Encrypt: XOR-stream with SHA256 keystream
+        let ciphertext = xor_stream_encrypt(&env, &key, &nonce, &plaintext);
+
+        // Compute authentication tag: SHA256(key || nonce || ciphertext)
+        let auth_tag = compute_auth_tag(&env, &key, &nonce, &ciphertext);
+
+        let metadata = EncryptedMetadata {
+            ciphertext: ciphertext.clone(),
+            nonce,
+            auth_tag,
+            encrypted_at_ledger: ledger_seq,
+        };
+        storage::set_encrypted_metadata(&env, &depositor, deposit_id, &metadata);
+        events::metadata_encrypted(
+            &env,
+            &depositor,
+            deposit_id,
+            ciphertext.len(),
+            ledger_seq,
+        );
+
+        Ok(())
+    }
+
+    /// Decrypt the stored metadata for `(depositor, deposit_id)` using `key`.
+    ///
+    /// Returns the original plaintext bytes.  The `key` is NEVER stored on-chain.
+    ///
+    /// # Authentication
+    /// `depositor.require_auth()` is called first.
+    ///
+    /// # Errors
+    /// * `MetadataNotFound` — no encrypted metadata exists for this deposit.
+    /// * `DecryptionFailed` — the authentication tag did not match; wrong key or
+    ///   tampered ciphertext.
+    ///
+    /// # Events
+    /// Emits `MetadataDecrypted(depositor, deposit_id, ledger)`.
+    pub fn decrypt_metadata(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+        key: soroban_sdk::BytesN<32>,
+    ) -> Result<soroban_sdk::Bytes, VaultError> {
+        // Auth-first
+        depositor.require_auth();
+
+        // Load stored ciphertext + nonce + tag
+        let metadata = storage::get_encrypted_metadata(&env, &depositor, deposit_id)
+            .ok_or(VaultError::MetadataNotFound)?;
+
+        // Verify authentication tag BEFORE decryption (prevent oracle attacks)
+        let expected_tag = compute_auth_tag(&env, &key, &metadata.nonce, &metadata.ciphertext);
+        if expected_tag != metadata.auth_tag {
+            return Err(VaultError::DecryptionFailed);
+        }
+
+        // Decrypt (XOR-stream is its own inverse)
+        let plaintext = xor_stream_encrypt(&env, &key, &metadata.nonce, &metadata.ciphertext);
+
+        events::metadata_decrypted(&env, &depositor, deposit_id, env.ledger().sequence());
+
+        Ok(plaintext)
+    }
+
+    /// Rotate the encryption key for `(depositor, deposit_id)`.
+    ///
+    /// This function atomically:
+    /// 1. Verifies `old_key` by checking the stored authentication tag.
+    /// 2. Decrypts the ciphertext with `old_key`.
+    /// 3. Re-encrypts the plaintext with `new_key` (new nonce from current ledger).
+    /// 4. Stores the new `EncryptedMetadata`.
+    ///
+    /// Both keys must be 32 bytes.  Neither is stored on-chain.
+    ///
+    /// # Authentication
+    /// `depositor.require_auth()` is called first.
+    ///
+    /// # Errors
+    /// * `MetadataNotFound` — no encrypted metadata exists for this deposit.
+    /// * `DecryptionFailed` — `old_key` does not match the stored authentication tag.
+    ///
+    /// # Events
+    /// Emits `EncryptionKeyRotated(depositor, deposit_id, ledger)`.
+    pub fn rotate_encryption_key(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+        old_key: soroban_sdk::BytesN<32>,
+        new_key: soroban_sdk::BytesN<32>,
+    ) -> Result<(), VaultError> {
+        // Auth-first
+        depositor.require_auth();
+
+        // Load existing encrypted metadata
+        let metadata = storage::get_encrypted_metadata(&env, &depositor, deposit_id)
+            .ok_or(VaultError::MetadataNotFound)?;
+
+        // Verify old key via auth tag
+        let expected_tag =
+            compute_auth_tag(&env, &old_key, &metadata.nonce, &metadata.ciphertext);
+        if expected_tag != metadata.auth_tag {
+            return Err(VaultError::DecryptionFailed);
+        }
+
+        // Decrypt with old key
+        let plaintext = xor_stream_encrypt(&env, &old_key, &metadata.nonce, &metadata.ciphertext);
+
+        // New nonce from current ledger sequence (ensures nonce freshness after rotation)
+        let new_ledger_seq = env.ledger().sequence();
+        let new_nonce = derive_nonce(&env, new_ledger_seq, deposit_id);
+
+        // Re-encrypt with new key
+        let new_ciphertext = xor_stream_encrypt(&env, &new_key, &new_nonce, &plaintext);
+        let new_auth_tag = compute_auth_tag(&env, &new_key, &new_nonce, &new_ciphertext);
+
+        let new_metadata = EncryptedMetadata {
+            ciphertext: new_ciphertext,
+            nonce: new_nonce,
+            auth_tag: new_auth_tag,
+            encrypted_at_ledger: new_ledger_seq,
+        };
+
+        storage::set_encrypted_metadata(&env, &depositor, deposit_id, &new_metadata);
+        events::encryption_key_rotated(&env, &depositor, deposit_id, new_ledger_seq);
+
+        Ok(())
+    }
+
+    /// Read-only: returns the raw `EncryptedMetadata` for `(depositor, deposit_id)`.
+    ///
+    /// This returns only ciphertext + nonce + tag — the plaintext cannot be
+    /// recovered without the key.  No authentication is required for this query.
+    pub fn get_encrypted_metadata(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Option<EncryptedMetadata> {
+        storage::get_encrypted_metadata_readonly(&env, &depositor, deposit_id)
     }
 }

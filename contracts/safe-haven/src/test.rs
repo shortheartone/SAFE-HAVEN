@@ -5378,3 +5378,563 @@ fn test_multiple_depositors_independent_metrics() {
     assert_eq!(alice_metrics.depositor, alice);
     assert_eq!(bob_metrics.depositor, bob);
 }
+
+// ================================================================
+//  Encrypted Metadata Tests
+// ================================================================
+//
+// Tests verify:
+//   1. Successful encrypt / decrypt round-trip (same key)
+//   2. Decryption with a wrong key returns DecryptionFailed
+//   3. Decryption without prior encryption returns MetadataNotFound
+//   4. Plaintext exceeding MAX_METADATA_BYTES returns MetadataTooLarge
+//   5. encrypt_metadata requires depositor authentication
+//   6. decrypt_metadata requires depositor authentication
+//   7. rotate_encryption_key with old key → new key preserves plaintext
+//   8. rotate_encryption_key with wrong old key returns DecryptionFailed
+//   9. rotate_encryption_key without prior encryption returns MetadataNotFound
+//  10. encrypt_metadata on a non-existent deposit returns NoDepositFound
+//  11. get_encrypted_metadata returns the stored blob (no auth needed)
+//  12. Empty plaintext round-trips correctly
+//  13. Maximum-length plaintext (512 bytes) is accepted
+//  14. Plaintext of 513 bytes is rejected with MetadataTooLarge
+//  15. Multiple deposits have independent encrypted metadata
+
+// ----------------------------------------------------------------
+//  Helper: make a 32-byte key from a seed byte
+// ----------------------------------------------------------------
+
+fn make_key(env: &Env, seed: u8) -> soroban_sdk::BytesN<32> {
+    let mut key = [0u8; 32];
+    for (i, b) in key.iter_mut().enumerate() {
+        *b = seed.wrapping_add(i as u8);
+    }
+    soroban_sdk::BytesN::from_array(env, &key)
+}
+
+// ----------------------------------------------------------------
+//  Helper: make Bytes from a &str-like byte slice
+// ----------------------------------------------------------------
+
+fn make_plaintext(env: &Env, content: &[u8]) -> soroban_sdk::Bytes {
+    let mut b = soroban_sdk::Bytes::new(env);
+    for byte in content.iter() {
+        b.push_back(*byte);
+    }
+    b
+}
+
+// ----------------------------------------------------------------
+//  1. Encrypt / decrypt round-trip
+// ----------------------------------------------------------------
+
+#[test]
+fn test_encrypt_decrypt_roundtrip() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let deposit_id = vault
+        .deposit(&alice, &token, &1_000, &(now + 100), &0)
+        .expect("deposit");
+
+    let key = make_key(&env, 42);
+    let plaintext = make_plaintext(&env, b"hello encrypted world");
+
+    vault
+        .encrypt_metadata(&alice, &deposit_id, &key, &plaintext)
+        .expect("encrypt should succeed");
+
+    let recovered = vault
+        .decrypt_metadata(&alice, &deposit_id, &key)
+        .expect("decrypt should succeed");
+
+    assert_eq!(plaintext, recovered, "round-trip must recover original plaintext");
+}
+
+// ----------------------------------------------------------------
+//  2. Wrong key returns DecryptionFailed
+// ----------------------------------------------------------------
+
+#[test]
+fn test_decrypt_wrong_key_fails() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let deposit_id = vault
+        .deposit(&alice, &token, &1_000, &(now + 100), &0)
+        .expect("deposit");
+
+    let correct_key = make_key(&env, 1);
+    let wrong_key = make_key(&env, 2); // different seed
+
+    vault
+        .encrypt_metadata(&alice, &deposit_id, &correct_key, &make_plaintext(&env, b"secret"))
+        .expect("encrypt should succeed");
+
+    let err = vault
+        .try_decrypt_metadata(&alice, &deposit_id, &wrong_key)
+        .expect_err("wrong key should fail");
+
+    assert_eq!(
+        err.unwrap(),
+        crate::errors::VaultError::DecryptionFailed,
+        "wrong key must return DecryptionFailed"
+    );
+}
+
+// ----------------------------------------------------------------
+//  3. Decrypt without prior encryption returns MetadataNotFound
+// ----------------------------------------------------------------
+
+#[test]
+fn test_decrypt_no_metadata_returns_not_found() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let deposit_id = vault
+        .deposit(&alice, &token, &1_000, &(now + 100), &0)
+        .expect("deposit");
+
+    let key = make_key(&env, 7);
+
+    let err = vault
+        .try_decrypt_metadata(&alice, &deposit_id, &key)
+        .expect_err("no metadata should fail");
+
+    assert_eq!(
+        err.unwrap(),
+        crate::errors::VaultError::MetadataNotFound
+    );
+}
+
+// ----------------------------------------------------------------
+//  4. Plaintext exceeding MAX_METADATA_BYTES returns MetadataTooLarge
+// ----------------------------------------------------------------
+
+#[test]
+fn test_encrypt_too_large_metadata_fails() {
+    use crate::types::MAX_METADATA_BYTES;
+
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let deposit_id = vault
+        .deposit(&alice, &token, &1_000, &(now + 100), &0)
+        .expect("deposit");
+
+    let key = make_key(&env, 5);
+
+    // Build plaintext of MAX_METADATA_BYTES + 1 bytes
+    let mut too_large = soroban_sdk::Bytes::new(&env);
+    for i in 0..(MAX_METADATA_BYTES + 1) {
+        too_large.push_back((i % 256) as u8);
+    }
+
+    let err = vault
+        .try_encrypt_metadata(&alice, &deposit_id, &key, &too_large)
+        .expect_err("oversized metadata should fail");
+
+    assert_eq!(err.unwrap(), crate::errors::VaultError::MetadataTooLarge);
+}
+
+// ----------------------------------------------------------------
+//  5. encrypt_metadata requires depositor authentication
+// ----------------------------------------------------------------
+
+#[test]
+#[should_panic] // missing auth → Soroban panics in test mode without mock_all_auths
+fn test_encrypt_requires_auth() {
+    let env = Env::default();
+    // Intentionally NOT calling env.mock_all_auths() to test auth enforcement
+
+    let vault_id = env.register(SafeHaven, ());
+    let vault = SafeHavenClient::new(&env, &vault_id);
+
+    let admin: Address = Address::generate(&env);
+    let alice: Address = Address::generate(&env);
+    let fee: Address = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token = token_id.address();
+
+    // Initialize without auth (will fail in real; we need mock for setup)
+    env.mock_all_auths();
+    StellarAssetClient::new(&env, &token).mint(&alice, &10_000);
+    vault.initialize(&admin, &fee, &None, &None);
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &(env.ledger().timestamp() + 100), &0).unwrap();
+    env.set_auths(&[]); // clear all authorizations
+
+    let key = make_key(&env, 1);
+    let plaintext = make_plaintext(&env, b"test");
+
+    // This should panic because alice has no authorization
+    vault.encrypt_metadata(&alice, &deposit_id, &key, &plaintext).unwrap();
+}
+
+// ----------------------------------------------------------------
+//  6. decrypt_metadata requires depositor authentication
+// ----------------------------------------------------------------
+
+#[test]
+#[should_panic]
+fn test_decrypt_requires_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let vault_id = env.register(SafeHaven, ());
+    let vault = SafeHavenClient::new(&env, &vault_id);
+
+    let admin: Address = Address::generate(&env);
+    let alice: Address = Address::generate(&env);
+    let fee: Address = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token = token_id.address();
+
+    StellarAssetClient::new(&env, &token).mint(&alice, &10_000);
+    vault.initialize(&admin, &fee, &None, &None);
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &(env.ledger().timestamp() + 100), &0).unwrap();
+
+    let key = make_key(&env, 1);
+    vault.encrypt_metadata(&alice, &deposit_id, &key, &make_plaintext(&env, b"secret")).unwrap();
+
+    env.set_auths(&[]); // clear all authorizations
+
+    // Should panic — no auth provided for decrypt
+    vault.decrypt_metadata(&alice, &deposit_id, &key).unwrap();
+}
+
+// ----------------------------------------------------------------
+//  7. Key rotation preserves plaintext
+// ----------------------------------------------------------------
+
+#[test]
+fn test_rotate_key_preserves_plaintext() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let deposit_id = vault
+        .deposit(&alice, &token, &1_000, &(now + 100), &0)
+        .expect("deposit");
+
+    let old_key = make_key(&env, 10);
+    let new_key = make_key(&env, 20);
+    let plaintext = make_plaintext(&env, b"rotate me safely");
+
+    // Encrypt with old key
+    vault
+        .encrypt_metadata(&alice, &deposit_id, &old_key, &plaintext)
+        .expect("initial encrypt");
+
+    // Advance ledger sequence so the new nonce differs
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        timestamp: env.ledger().timestamp() + 1,
+        protocol_version: env.ledger().protocol_version(),
+        sequence_number: env.ledger().sequence() + 1,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 16,
+        min_persistent_entry_ttl: 100,
+    });
+
+    // Rotate key
+    vault
+        .rotate_encryption_key(&alice, &deposit_id, &old_key, &new_key)
+        .expect("key rotation should succeed");
+
+    // Old key should now fail
+    let err = vault
+        .try_decrypt_metadata(&alice, &deposit_id, &old_key)
+        .expect_err("old key must no longer work after rotation");
+    assert_eq!(err.unwrap(), crate::errors::VaultError::DecryptionFailed);
+
+    // New key should recover the same plaintext
+    let recovered = vault
+        .decrypt_metadata(&alice, &deposit_id, &new_key)
+        .expect("new key must decrypt successfully");
+    assert_eq!(plaintext, recovered, "plaintext must be preserved after rotation");
+}
+
+// ----------------------------------------------------------------
+//  8. Rotation with wrong old key returns DecryptionFailed
+// ----------------------------------------------------------------
+
+#[test]
+fn test_rotate_wrong_old_key_fails() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let deposit_id = vault
+        .deposit(&alice, &token, &1_000, &(now + 100), &0)
+        .expect("deposit");
+
+    let correct_key = make_key(&env, 11);
+    let wrong_old_key = make_key(&env, 12);
+    let new_key = make_key(&env, 13);
+
+    vault
+        .encrypt_metadata(&alice, &deposit_id, &correct_key, &make_plaintext(&env, b"data"))
+        .expect("encrypt");
+
+    let err = vault
+        .try_rotate_encryption_key(&alice, &deposit_id, &wrong_old_key, &new_key)
+        .expect_err("wrong old key must fail rotation");
+
+    assert_eq!(err.unwrap(), crate::errors::VaultError::DecryptionFailed);
+}
+
+// ----------------------------------------------------------------
+//  9. Rotation without prior encryption returns MetadataNotFound
+// ----------------------------------------------------------------
+
+#[test]
+fn test_rotate_no_prior_metadata_returns_not_found() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let deposit_id = vault
+        .deposit(&alice, &token, &1_000, &(now + 100), &0)
+        .expect("deposit");
+
+    let old_key = make_key(&env, 3);
+    let new_key = make_key(&env, 4);
+
+    let err = vault
+        .try_rotate_encryption_key(&alice, &deposit_id, &old_key, &new_key)
+        .expect_err("no metadata should return MetadataNotFound");
+
+    assert_eq!(err.unwrap(), crate::errors::VaultError::MetadataNotFound);
+}
+
+// ----------------------------------------------------------------
+//  10. encrypt_metadata on non-existent deposit returns NoDepositFound
+// ----------------------------------------------------------------
+
+#[test]
+fn test_encrypt_nonexistent_deposit_fails() {
+    let (env, vault, _token, _admin, alice, _fee) = setup();
+
+    let nonexistent_id: u32 = 9999;
+    let key = make_key(&env, 6);
+    let plaintext = make_plaintext(&env, b"ghost deposit");
+
+    let err = vault
+        .try_encrypt_metadata(&alice, &nonexistent_id, &key, &plaintext)
+        .expect_err("nonexistent deposit must fail");
+
+    assert_eq!(err.unwrap(), crate::errors::VaultError::NoDepositFound);
+}
+
+// ----------------------------------------------------------------
+//  11. get_encrypted_metadata returns stored blob (no auth required)
+// ----------------------------------------------------------------
+
+#[test]
+fn test_get_encrypted_metadata_returns_blob() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let deposit_id = vault
+        .deposit(&alice, &token, &1_000, &(now + 100), &0)
+        .expect("deposit");
+
+    let key = make_key(&env, 77);
+    let plaintext = make_plaintext(&env, b"viewable ciphertext");
+
+    vault
+        .encrypt_metadata(&alice, &deposit_id, &key, &plaintext)
+        .expect("encrypt");
+
+    let blob = vault
+        .get_encrypted_metadata(&alice, &deposit_id)
+        .expect("blob must exist");
+
+    // Ciphertext must not equal plaintext (encryption changed it)
+    assert_ne!(
+        blob.ciphertext, plaintext,
+        "ciphertext must differ from plaintext"
+    );
+    // Nonce must be 8 bytes (non-zero)
+    assert_eq!(blob.nonce.len(), 8);
+    // Auth tag must be 32 bytes
+    assert_eq!(blob.auth_tag.len(), 32);
+    // Ledger recorded
+    assert_eq!(blob.encrypted_at_ledger, env.ledger().sequence());
+}
+
+// ----------------------------------------------------------------
+//  12. Empty plaintext round-trips correctly
+// ----------------------------------------------------------------
+
+#[test]
+fn test_encrypt_decrypt_empty_plaintext() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let deposit_id = vault
+        .deposit(&alice, &token, &1_000, &(now + 100), &0)
+        .expect("deposit");
+
+    let key = make_key(&env, 99);
+    let empty = soroban_sdk::Bytes::new(&env);
+
+    vault
+        .encrypt_metadata(&alice, &deposit_id, &key, &empty)
+        .expect("encrypt empty");
+
+    let recovered = vault
+        .decrypt_metadata(&alice, &deposit_id, &key)
+        .expect("decrypt empty");
+
+    assert_eq!(empty, recovered, "empty plaintext round-trip must work");
+}
+
+// ----------------------------------------------------------------
+//  13. Maximum-length plaintext (512 bytes) is accepted
+// ----------------------------------------------------------------
+
+#[test]
+fn test_encrypt_max_length_plaintext_accepted() {
+    use crate::types::MAX_METADATA_BYTES;
+
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let deposit_id = vault
+        .deposit(&alice, &token, &1_000, &(now + 100), &0)
+        .expect("deposit");
+
+    let key = make_key(&env, 55);
+    let mut max_bytes = soroban_sdk::Bytes::new(&env);
+    for i in 0..MAX_METADATA_BYTES {
+        max_bytes.push_back((i % 256) as u8);
+    }
+
+    vault
+        .encrypt_metadata(&alice, &deposit_id, &key, &max_bytes)
+        .expect("max-size plaintext must be accepted");
+
+    let recovered = vault
+        .decrypt_metadata(&alice, &deposit_id, &key)
+        .expect("decrypt max-size");
+
+    assert_eq!(max_bytes, recovered, "max-size round-trip must preserve content");
+}
+
+// ----------------------------------------------------------------
+//  14. Plaintext of 513 bytes is rejected
+// ----------------------------------------------------------------
+
+#[test]
+fn test_encrypt_over_max_length_rejected() {
+    use crate::types::MAX_METADATA_BYTES;
+
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let deposit_id = vault
+        .deposit(&alice, &token, &1_000, &(now + 100), &0)
+        .expect("deposit");
+
+    let key = make_key(&env, 33);
+    let mut over_max = soroban_sdk::Bytes::new(&env);
+    for i in 0..(MAX_METADATA_BYTES + 1) {
+        over_max.push_back((i % 256) as u8);
+    }
+
+    let err = vault
+        .try_encrypt_metadata(&alice, &deposit_id, &key, &over_max)
+        .expect_err("over-max must be rejected");
+
+    assert_eq!(err.unwrap(), crate::errors::VaultError::MetadataTooLarge);
+}
+
+// ----------------------------------------------------------------
+//  15. Multiple deposits have independent encrypted metadata
+// ----------------------------------------------------------------
+
+#[test]
+fn test_independent_metadata_per_deposit() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let id_a = vault
+        .deposit(&alice, &token, &1_000, &(now + 100), &0)
+        .expect("deposit A");
+    let id_b = vault
+        .deposit(&alice, &token, &1_000, &(now + 200), &0)
+        .expect("deposit B");
+
+    let key_a = make_key(&env, 50);
+    let key_b = make_key(&env, 60);
+    let pt_a = make_plaintext(&env, b"deposit A secret");
+    let pt_b = make_plaintext(&env, b"deposit B secret");
+
+    vault
+        .encrypt_metadata(&alice, &id_a, &key_a, &pt_a)
+        .expect("encrypt A");
+    vault
+        .encrypt_metadata(&alice, &id_b, &key_b, &pt_b)
+        .expect("encrypt B");
+
+    // Decrypt each with its own key
+    let recovered_a = vault
+        .decrypt_metadata(&alice, &id_a, &key_a)
+        .expect("decrypt A");
+    let recovered_b = vault
+        .decrypt_metadata(&alice, &id_b, &key_b)
+        .expect("decrypt B");
+
+    assert_eq!(pt_a, recovered_a);
+    assert_eq!(pt_b, recovered_b);
+
+    // Cross-key access must fail
+    let err = vault
+        .try_decrypt_metadata(&alice, &id_a, &key_b)
+        .expect_err("cross-key must fail");
+    assert_eq!(err.unwrap(), crate::errors::VaultError::DecryptionFailed);
+}
+
+// ----------------------------------------------------------------
+//  16. Re-encrypt (overwrite) updates stored metadata
+// ----------------------------------------------------------------
+
+#[test]
+fn test_re_encrypt_updates_metadata() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let deposit_id = vault
+        .deposit(&alice, &token, &1_000, &(now + 100), &0)
+        .expect("deposit");
+
+    let key = make_key(&env, 15);
+    let first_pt = make_plaintext(&env, b"first version");
+    let second_pt = make_plaintext(&env, b"second version");
+
+    // First encryption
+    vault
+        .encrypt_metadata(&alice, &deposit_id, &key, &first_pt)
+        .expect("first encrypt");
+
+    // Advance ledger so nonce changes
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        timestamp: env.ledger().timestamp() + 1,
+        protocol_version: env.ledger().protocol_version(),
+        sequence_number: env.ledger().sequence() + 5,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 16,
+        min_persistent_entry_ttl: 100,
+    });
+
+    // Overwrite with second plaintext using same key
+    vault
+        .encrypt_metadata(&alice, &deposit_id, &key, &second_pt)
+        .expect("second encrypt");
+
+    // Should recover second version
+    let recovered = vault
+        .decrypt_metadata(&alice, &deposit_id, &key)
+        .expect("decrypt after overwrite");
+
+    assert_eq!(second_pt, recovered, "overwrite must store new plaintext");
+}

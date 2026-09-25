@@ -29,4 +29,13 @@ pub enum VaultError {
     RecipientNotWhitelisted = 18,
     /// Compound frequency must be >= 60 seconds if non-zero (issue #332).
     InvalidCompoundFrequency = 19,
+    /// Encryption key must be exactly 32 bytes (BytesN<32>).
+    InvalidKey = 20,
+    /// No encrypted metadata exists for this (depositor, deposit_id) pair.
+    MetadataNotFound = 21,
+    /// Decryption failed — the authentication tag did not match.
+    /// This indicates either a wrong key was supplied or the ciphertext was tampered with.
+    DecryptionFailed = 22,
+    /// Metadata exceeds MAX_METADATA_BYTES (512 bytes).
+    MetadataTooLarge = 23,
 }

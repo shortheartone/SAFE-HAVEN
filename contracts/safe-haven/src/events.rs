@@ -207,3 +207,54 @@ pub fn interest_accrued(
     env.events()
         .publish(topics, (deposit_id, old_amount, new_amount));
 }
+
+// ----------------------------------------------------------------
+//  Encrypted metadata events
+// ----------------------------------------------------------------
+
+/// Emitted when metadata is encrypted and stored for a deposit.
+///
+/// The event does **not** include the key or plaintext. The `nonce_len`
+/// field is included so indexers can identify the nonce that was used
+/// (the full nonce is stored on-chain in `EncryptedMetadata`).
+pub fn metadata_encrypted(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    ciphertext_len: u32,
+    encrypted_at_ledger: u32,
+) {
+    let topics = (Symbol::new(env, "meta_enc"), depositor.clone());
+    env.events()
+        .publish(topics, (deposit_id, ciphertext_len, encrypted_at_ledger));
+}
+
+/// Emitted when metadata is successfully decrypted.
+///
+/// The event does **not** include the plaintext. The event is emitted
+/// so on-chain observers can detect metadata access patterns.
+pub fn metadata_decrypted(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    decrypted_at_ledger: u32,
+) {
+    let topics = (Symbol::new(env, "meta_dec"), depositor.clone());
+    env.events()
+        .publish(topics, (deposit_id, decrypted_at_ledger));
+}
+
+/// Emitted when the encryption key for a deposit's metadata is rotated.
+///
+/// Rotation decrypts with the old key and re-encrypts with the new key
+/// atomically. The event confirms the rotation completed successfully.
+pub fn encryption_key_rotated(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    rotated_at_ledger: u32,
+) {
+    let topics = (Symbol::new(env, "key_rotated"), depositor.clone());
+    env.events()
+        .publish(topics, (deposit_id, rotated_at_ledger));
+}

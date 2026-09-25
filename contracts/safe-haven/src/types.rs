@@ -89,6 +89,9 @@ pub enum VaultKey {
     RewardsPool,
     /// Rewards claimed by a staker (track cumulative for auditing)
     StakerRewardsClaimed(Address),
+    /// Encrypted metadata for a specific deposit (depositor, deposit_id).
+    /// Key material is never stored; only the ciphertext + nonce + auth_tag are persisted.
+    EncryptedMetadata(Address, u32),
 }
 
 #[contracttype]
@@ -168,6 +171,80 @@ pub struct StakerEntry {
     pub staker: Address,
     pub stake_amount: i128,
 }
+
+// ----------------------------------------------------------------
+//  Encrypted Metadata
+// ----------------------------------------------------------------
+
+/// Encrypted metadata attached to a vault deposit.
+///
+/// ## Encryption scheme: HMAC-CTR (XOR-stream cipher)
+///
+/// Because the Soroban WASM sandbox is `no_std` and provides only
+/// `env.crypto().sha256()`, we implement a lightweight authenticated
+/// XOR-stream cipher:
+///
+/// 1. **Key derivation** (prevents direct SHA256 length-extension attacks):
+///    ```
+///    round_key(i) = SHA256(key_bytes || nonce_bytes || i_as_4_le_bytes)
+///    ```
+///    Each 32-byte block of keystream is produced by hashing the caller's
+///    32-byte key, the 8-byte nonce, and the 4-byte block counter.
+///
+/// 2. **Encryption**:
+///    ```
+///    ciphertext[i] = plaintext[i] XOR keystream_byte(i)
+///    ```
+///
+/// 3. **Authentication tag** — a final SHA256 over `(key || nonce || ciphertext)`:
+///    ```
+///    tag = SHA256(key || nonce || ciphertext)
+///    ```
+///    The tag is verified before decryption; if it does not match, the
+///    function returns `DecryptionFailed` without exposing partial plaintext.
+///
+/// 4. **Nonce** — derived deterministically from `(ledger_sequence, deposit_id)`:
+///    ```
+///    nonce = SHA256(ledger_sequence_as_4_le_bytes || deposit_id_as_4_le_bytes)[0..8]
+///    ```
+///    The nonce is stored alongside the ciphertext so decryption does not
+///    require the original ledger sequence.
+///
+/// ## Security properties
+///
+/// | Property | Guarantee |
+/// |---|---|
+/// | Confidentiality | Ciphertext is XOR-masked; key required to recover plaintext |
+/// | Integrity | SHA256-based MAC tag; any bit-flip in ciphertext is detected |
+/// | Auth enforcement | `require_auth()` checked before every encrypt/decrypt operation |
+/// | Nonce uniqueness | Nonce derived from (ledger_sequence, deposit_id); changes on each new deposit |
+/// | Key rotation | `rotate_encryption_key` decrypts with old key then re-encrypts with new key atomically |
+///
+/// ## Limitations
+///
+/// * The scheme is NOT IND-CCA2 secure; it provides authenticated encryption
+///   equivalent to HMAC-CTR with a SHA256 PRF. Sufficient for metadata
+///   confidentiality on-chain but not a substitute for AES-GCM in general use.
+/// * Maximum plaintext size is `MAX_METADATA_BYTES` (512 bytes) to stay within
+///   the Soroban instruction budget.
+/// * Key material is supplied by the caller at encrypt/decrypt time and is
+///   NEVER stored on-chain.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EncryptedMetadata {
+    /// XOR-stream ciphertext of the original metadata bytes.
+    pub ciphertext: soroban_sdk::Bytes,
+    /// 8-byte nonce derived from `(ledger_sequence, deposit_id)` at encryption time.
+    pub nonce: soroban_sdk::BytesN<8>,
+    /// SHA256 authentication tag over `(key || nonce || ciphertext)`.
+    pub auth_tag: soroban_sdk::BytesN<32>,
+    /// Ledger sequence at which this metadata was last encrypted or rotated.
+    pub encrypted_at_ledger: u32,
+}
+
+/// Maximum plaintext metadata size in bytes.
+/// Chosen to stay comfortably within the Soroban instruction budget.
+pub const MAX_METADATA_BYTES: u32 = 512;
 
 /// Deposit type indicator — distinguishes between timestamp-based and ledger-based deposits
 #[contracttype]
