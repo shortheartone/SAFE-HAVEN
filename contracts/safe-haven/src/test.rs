@@ -1974,3 +1974,299 @@ fn test_remove_depositor_o1_no_duplicate_on_redeposit() {
     assert_eq!(page.len(), 1);
     assert_eq!(page.get(0).unwrap(), alice);
 }
+
+
+// ================================================================
+//  Watchlist Management Tests
+// ================================================================
+
+/// Test basic watchlist add functionality.
+#[test]
+fn test_watchlist_add_single_deposit() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &10_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+
+    let bob: Address = Address::generate(&env);
+    vault.add_to_watchlist(&bob, &alice, &deposit_id);
+
+    let watchlist = vault.get_watchlist(&bob);
+    assert_eq!(watchlist.len(), 1);
+    
+    let entry = watchlist.get(0).unwrap();
+    assert_eq!(entry.depositor, alice);
+    assert_eq!(entry.deposit_id, deposit_id);
+}
+
+/// Test that adding the same deposit twice fails with DepositAlreadyWatched.
+#[test]
+fn test_watchlist_duplicate_add_fails() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &10_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+
+    let bob: Address = Address::generate(&env);
+    vault.add_to_watchlist(&bob, &alice, &deposit_id);
+
+    let result = vault.try_add_to_watchlist(&bob, &alice, &deposit_id);
+    assert_eq!(result, Err(Ok(VaultError::DepositAlreadyWatched)));
+}
+
+/// Test watchlist size limit (MAX_WATCHLIST_SIZE = 100).
+#[test]
+fn test_watchlist_size_limit() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &100_000_000);
+
+    let bob: Address = Address::generate(&env);
+    
+    // Add 100 deposits to watchlist (the maximum)
+    for i in 0..100 {
+        let unlock = env.ledger().timestamp() + 3600 + i as u64;
+        let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+        vault.add_to_watchlist(&bob, &alice, &deposit_id);
+    }
+
+    let watchlist = vault.get_watchlist(&bob);
+    assert_eq!(watchlist.len(), 100);
+
+    // Try to add the 101st deposit — should fail with WatchlistFull
+    let unlock = env.ledger().timestamp() + 3600 + 100;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+    let result = vault.try_add_to_watchlist(&bob, &alice, &deposit_id);
+    assert_eq!(result, Err(Ok(VaultError::WatchlistFull)));
+}
+
+/// Test basic watchlist removal.
+#[test]
+fn test_watchlist_remove_deposit() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &10_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+
+    let bob: Address = Address::generate(&env);
+    vault.add_to_watchlist(&bob, &alice, &deposit_id);
+
+    let watchlist = vault.get_watchlist(&bob);
+    assert_eq!(watchlist.len(), 1);
+
+    vault.remove_from_watchlist(&bob, &alice, &deposit_id);
+
+    let watchlist = vault.get_watchlist(&bob);
+    assert_eq!(watchlist.len(), 0);
+}
+
+/// Test that removing a deposit that's not on the watchlist fails.
+#[test]
+fn test_watchlist_remove_nonexistent_fails() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &10_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    let _deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+
+    let bob: Address = Address::generate(&env);
+    let result = vault.try_remove_from_watchlist(&bob, &alice, &0);
+    assert_eq!(result, Err(Ok(VaultError::DepositNotWatched)));
+}
+
+/// Test multiple deposits on one user's watchlist.
+#[test]
+fn test_watchlist_multiple_deposits() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &50_000);
+
+    let bob: Address = Address::generate(&env);
+
+    // Add 5 deposits from alice to bob's watchlist
+    let mut deposit_ids = Vec::new();
+    for i in 0..5 {
+        let unlock = env.ledger().timestamp() + 3600 + i as u64;
+        let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+        deposit_ids.push(deposit_id);
+        vault.add_to_watchlist(&bob, &alice, &deposit_id);
+    }
+
+    let watchlist = vault.get_watchlist(&bob);
+    assert_eq!(watchlist.len(), 5);
+
+    // Verify all deposits are in the watchlist
+    for (i, deposit_id) in deposit_ids.iter().enumerate() {
+        let entry = watchlist.get(i as u32).unwrap();
+        assert_eq!(entry.deposit_id, *deposit_id);
+        assert_eq!(entry.depositor, alice);
+    }
+}
+
+/// Test watching deposits from multiple depositors.
+#[test]
+fn test_watchlist_multiple_depositors() {
+    let (env, vault, token, _admin, _alice, _fee) = setup();
+    
+    let alice: Address = Address::generate(&env);
+    let charlie: Address = Address::generate(&env);
+    let bob: Address = Address::generate(&env);
+
+    StellarAssetClient::new(&env, &token).mint(&alice, &50_000);
+    StellarAssetClient::new(&env, &token).mint(&charlie, &50_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    
+    // Alice makes a deposit
+    let alice_deposit = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+    
+    // Charlie makes a deposit
+    let charlie_deposit = vault.deposit(&charlie, &token, &2_000, &unlock, &0);
+
+    // Bob watches both
+    vault.add_to_watchlist(&bob, &alice, &alice_deposit);
+    vault.add_to_watchlist(&bob, &charlie, &charlie_deposit);
+
+    let watchlist = vault.get_watchlist(&bob);
+    assert_eq!(watchlist.len(), 2);
+
+    // Verify entries
+    let entry1 = watchlist.get(0).unwrap();
+    let entry2 = watchlist.get(1).unwrap();
+    
+    assert_eq!(entry1.depositor, alice);
+    assert_eq!(entry1.deposit_id, alice_deposit);
+    
+    assert_eq!(entry2.depositor, charlie);
+    assert_eq!(entry2.deposit_id, charlie_deposit);
+}
+
+/// Test watchlist event emission on add.
+#[test]
+fn test_watchlist_add_emits_event() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &10_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+
+    let bob: Address = Address::generate(&env);
+    
+    vault.add_to_watchlist(&bob, &alice, &deposit_id);
+
+    let events = env.events();
+    let events = events.all().iter().rev().collect::<Vec<_>>();
+    let event = events.get(0).unwrap();
+    
+    // Check event has correct topics (watch_add, subscriber)
+    assert_eq!(event.0.len(), 2); // Should have 2 topics
+}
+
+/// Test watchlist event emission on remove.
+#[test]
+fn test_watchlist_remove_emits_event() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &10_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+
+    let bob: Address = Address::generate(&env);
+    vault.add_to_watchlist(&bob, &alice, &deposit_id);
+
+    vault.remove_from_watchlist(&bob, &alice, &deposit_id);
+
+    let events = env.events();
+    let events = events.all().iter().rev().collect::<Vec<_>>();
+    let event = events.get(0).unwrap();
+    
+    // Check event has correct topics (watch_rmv, subscriber)
+    assert_eq!(event.0.len(), 2); // Should have 2 topics
+}
+
+/// Test that watchlist is user-scoped (each user has their own).
+#[test]
+fn test_watchlist_per_user_scoped() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &20_000);
+
+    let bob: Address = Address::generate(&env);
+    let charlie: Address = Address::generate(&env);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    let deposit_id1 = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+    let deposit_id2 = vault.deposit(&alice, &token, &2_000, &unlock, &0);
+
+    // Bob watches deposit 1
+    vault.add_to_watchlist(&bob, &alice, &deposit_id1);
+
+    // Charlie watches deposit 2
+    vault.add_to_watchlist(&charlie, &alice, &deposit_id2);
+
+    // Verify separate watchlists
+    let bob_watchlist = vault.get_watchlist(&bob);
+    let charlie_watchlist = vault.get_watchlist(&charlie);
+
+    assert_eq!(bob_watchlist.len(), 1);
+    assert_eq!(charlie_watchlist.len(), 1);
+    
+    assert_eq!(bob_watchlist.get(0).unwrap().deposit_id, deposit_id1);
+    assert_eq!(charlie_watchlist.get(0).unwrap().deposit_id, deposit_id2);
+}
+
+/// Test watchlist auth — user must authorize their own watchlist operations.
+#[test]
+fn test_watchlist_requires_auth() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &10_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+
+    let bob: Address = Address::generate(&env);
+    let charlie: Address = Address::generate(&env);
+
+    // Bob tries to add to charlie's watchlist without charlie's auth
+    // This should fail because soroban enforces require_auth
+    // We'll test this by using try_ variant in a no-auth context
+    env.mock_auths(&[]); // Clear all auths
+    let result = vault.try_add_to_watchlist(&bob, &alice, &deposit_id);
+    
+    // The auth check happens because we're in no-auth mode
+    assert!(result.is_err());
+}
+
+/// Test removing and re-adding the same deposit to watchlist.
+#[test]
+fn test_watchlist_remove_and_readd() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    StellarAssetClient::new(&env, &token).mint(&alice, &10_000);
+
+    let unlock = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock, &0);
+
+    let bob: Address = Address::generate(&env);
+
+    // Add
+    vault.add_to_watchlist(&bob, &alice, &deposit_id);
+    assert_eq!(vault.get_watchlist(&bob).len(), 1);
+
+    // Remove
+    vault.remove_from_watchlist(&bob, &alice, &deposit_id);
+    assert_eq!(vault.get_watchlist(&bob).len(), 0);
+
+    // Re-add should succeed
+    vault.add_to_watchlist(&bob, &alice, &deposit_id);
+    assert_eq!(vault.get_watchlist(&bob).len(), 1);
+}
+
+/// Test empty watchlist returns empty vec.
+#[test]
+fn test_watchlist_empty() {
+    let (env, vault, _token, _admin, _alice, _fee) = setup();
+    let bob: Address = Address::generate(&env);
+
+    let watchlist = vault.get_watchlist(&bob);
+    assert_eq!(watchlist.len(), 0);
+}

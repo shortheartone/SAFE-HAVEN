@@ -1,6 +1,7 @@
 use soroban_sdk::{Address, Env, Vec};
 
-use crate::types::{VaultEntry, VaultKey, LedgerVaultEntry, MAX_LOCK_DURATION_SECS};
+use crate::types::{VaultEntry, VaultKey, LedgerVaultEntry, WatchlistEntry, MAX_LOCK_DURATION_SECS};
+use crate::constants::MAX_WATCHLIST_SIZE;
 
 // Number of seconds per ledger — Soroban ledgers are ~5 seconds apart.
 pub const LEDGER_SECONDS: u64 = 5;
@@ -434,4 +435,96 @@ pub fn get_storage_version(env: &Env) -> Option<u32> {
     env.storage()
         .persistent()
         .get(&VaultKey::StorageVersion)
+}
+
+
+// ----------------------------------------------------------------
+//  Watchlist helpers
+// ----------------------------------------------------------------
+
+/// Get the watchlist for a subscriber — a vector of (depositor, deposit_id) tuples
+/// representing deposits they are monitoring.
+fn get_watchlist(env: &Env, subscriber: &Address) -> Vec<WatchlistEntry> {
+    let key = VaultKey::Watchlist(subscriber.clone());
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Save the watchlist for a subscriber.
+fn save_watchlist(env: &Env, subscriber: &Address, entries: &Vec<WatchlistEntry>) {
+    let key = VaultKey::Watchlist(subscriber.clone());
+    env.storage().persistent().set(&key, entries);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+/// Add a deposit to a user's watchlist. Returns `Err(VaultError::WatchlistFull)` if
+/// the watchlist is already at MAX_WATCHLIST_SIZE.
+/// Returns `Err(VaultError::DepositAlreadyWatched)` if the deposit is already on the watchlist.
+/// Returns `Ok(())` on success.
+pub fn add_to_watchlist(
+    env: &Env,
+    subscriber: &Address,
+    depositor: &Address,
+    deposit_id: u32,
+) -> Result<(), crate::errors::VaultError> {
+    let mut watchlist = get_watchlist(env, subscriber);
+
+    // Check if already in watchlist
+    for entry in watchlist.iter() {
+        if entry.depositor == *depositor && entry.deposit_id == deposit_id {
+            return Err(crate::errors::VaultError::DepositAlreadyWatched);
+        }
+    }
+
+    // Check size limit
+    if watchlist.len() >= MAX_WATCHLIST_SIZE as usize {
+        return Err(crate::errors::VaultError::WatchlistFull);
+    }
+
+    let new_entry = WatchlistEntry {
+        depositor: depositor.clone(),
+        deposit_id,
+    };
+    watchlist.push_back(new_entry);
+    save_watchlist(env, subscriber, &watchlist);
+    Ok(())
+}
+
+/// Remove a deposit from a user's watchlist.
+/// Returns `Err(VaultError::DepositNotWatched)` if the deposit is not on the watchlist.
+/// Returns `Ok(())` on success.
+pub fn remove_from_watchlist(
+    env: &Env,
+    subscriber: &Address,
+    depositor: &Address,
+    deposit_id: u32,
+) -> Result<(), crate::errors::VaultError> {
+    let watchlist = get_watchlist(env, subscriber);
+    let mut new_watchlist: Vec<WatchlistEntry> = Vec::new(env);
+    let mut found = false;
+
+    for entry in watchlist.iter() {
+        if entry.depositor == *depositor && entry.deposit_id == deposit_id {
+            found = true;
+            // Skip this entry (removing it)
+        } else {
+            new_watchlist.push_back(entry.clone());
+        }
+    }
+
+    if !found {
+        return Err(crate::errors::VaultError::DepositNotWatched);
+    }
+
+    save_watchlist(env, subscriber, &new_watchlist);
+    Ok(())
+}
+
+/// Get all entries on a user's watchlist.
+pub fn get_user_watchlist(env: &Env, subscriber: &Address) -> Vec<WatchlistEntry> {
+    get_watchlist(env, subscriber)
 }

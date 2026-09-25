@@ -35,6 +35,9 @@ pub enum VaultKey {
     /// Persists the schema version written by the last `migrate()` call (or 1
     /// for contracts that were initialized before versioning was introduced).
     StorageVersion,
+    /// Stores a `Vec<(Address, u32)>` representing deposits (depositor, deposit_id) that
+    /// a user is monitoring. Key is (subscriber_address), value is list of watched deposits.
+    Watchlist(Address),
 }
 
 #[contracttype]
@@ -55,4 +58,11 @@ pub struct LedgerVaultEntry {
     pub unlock_ledger: u32,
     pub depositor: Address,
     pub penalty_bps: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WatchlistEntry {
+    pub depositor: Address,
+    pub deposit_id: u32,
 }

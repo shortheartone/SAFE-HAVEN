@@ -8,11 +8,11 @@ use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
 use crate::{
     constants::{
         MAX_BATCH_SIZE, MAX_DEPOSIT_AMOUNT, MAX_LOCK_DURATION_SECS, MIN_LOCK_DURATION_SECS,
-        MIN_LOCK_LEDGERS,
+        MIN_LOCK_LEDGERS, MAX_WATCHLIST_SIZE,
     },
     errors::VaultError,
     events, storage,
-    types::{VaultEntry, LedgerVaultEntry, STORAGE_VERSION},
+    types::{VaultEntry, LedgerVaultEntry, WatchlistEntry, STORAGE_VERSION},
 };
 
 #[contract]
@@ -660,6 +660,47 @@ impl SafeHaven {
 
     pub fn is_initialized(env: Env) -> bool {
         storage::is_initialized(&env)
+    }
+
+    // ----------------------------------------------------------------
+    //  Watchlist Management
+    // ----------------------------------------------------------------
+
+    /// Add a deposit to the caller's watchlist.
+    /// Returns `Err(VaultError::WatchlistFull)` if already at MAX_WATCHLIST_SIZE.
+    /// Returns `Err(VaultError::DepositAlreadyWatched)` if already on watchlist.
+    pub fn add_to_watchlist(
+        env: Env,
+        subscriber: Address,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Result<(), VaultError> {
+        subscriber.require_auth();
+
+        storage::add_to_watchlist(&env, &subscriber, &depositor, deposit_id)?;
+        events::add_to_watchlist(&env, &subscriber, &depositor, deposit_id);
+        Ok(())
+    }
+
+    /// Remove a deposit from the caller's watchlist.
+    /// Returns `Err(VaultError::DepositNotWatched)` if not on watchlist.
+    pub fn remove_from_watchlist(
+        env: Env,
+        subscriber: Address,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Result<(), VaultError> {
+        subscriber.require_auth();
+
+        storage::remove_from_watchlist(&env, &subscriber, &depositor, deposit_id)?;
+        events::remove_from_watchlist(&env, &subscriber, &depositor, deposit_id);
+        Ok(())
+    }
+
+    /// Get all deposits on a user's watchlist.
+    /// No auth required — this is a public read-only query.
+    pub fn get_watchlist(env: Env, subscriber: Address) -> Vec<crate::types::WatchlistEntry> {
+        storage::get_user_watchlist(&env, &subscriber)
     }
 
     // ----------------------------------------------------------------

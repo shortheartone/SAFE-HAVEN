@@ -23,3 +23,9 @@ pub const MIN_LOCK_LEDGERS: u32 = (MIN_LOCK_DURATION_SECS / LEDGER_SECONDS) as u
 /// and one event publish — roughly 1–2M instructions each.
 /// 25 leaves comfortable headroom for the common migration use-case.
 pub const MAX_BATCH_SIZE: u32 = 25;
+
+/// Maximum number of deposits a user can add to their watchlist.
+/// This limits per-user storage growth and prevents DOS attacks.
+/// 100 deposits per watchlist is a reasonable limit that allows monitoring
+/// of multiple positions while keeping storage costs manageable.
+pub const MAX_WATCHLIST_SIZE: u32 = 100;

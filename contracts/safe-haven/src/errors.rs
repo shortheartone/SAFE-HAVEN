@@ -18,4 +18,7 @@ pub enum VaultError {
     ContractPaused = 12,
     VaultAlreadyUnlocked = 13,
     MissingFeeRecipient = 14,
+    WatchlistFull = 15,
+    DepositAlreadyWatched = 16,
+    DepositNotWatched = 17,
 }

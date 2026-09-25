@@ -108,3 +108,24 @@ pub fn withdraw_to(
     let topics = (Symbol::new(env, "withdraw_to"), depositor.clone(), token.clone());
     env.events().publish(topics, (recipient.clone(), amount));
 }
+
+
+pub fn add_to_watchlist(
+    env: &Env,
+    subscriber: &Address,
+    depositor: &Address,
+    deposit_id: u32,
+) {
+    let topics = (Symbol::new(env, "watch_add"), subscriber.clone());
+    env.events().publish(topics, (depositor.clone(), deposit_id));
+}
+
+pub fn remove_from_watchlist(
+    env: &Env,
+    subscriber: &Address,
+    depositor: &Address,
+    deposit_id: u32,
+) {
+    let topics = (Symbol::new(env, "watch_rmv"), subscriber.clone());
+    env.events().publish(topics, (depositor.clone(), deposit_id));
+}
