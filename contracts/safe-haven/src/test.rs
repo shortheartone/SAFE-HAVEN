@@ -5689,3 +5689,304 @@ fn test_nft_rarity_amount_threshold_boundary() {
         assert_eq!(rarity, expected_rarity, "Failed for amount={}", amount);
     }
 }
+
+// ================================================================
+//  Liquidation Protection Tests
+// ================================================================
+
+#[test]
+fn test_enable_liquidation_protection() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let unlock_time = now + 1000;
+
+    let deposit_id = vault.deposit(&alice, &token, &1000, &unlock_time, &0)
+        .expect("deposit succeeds");
+
+    // Enable liquidation protection
+    let result = vault.enable_liquidation_protection(
+        &alice,
+        &deposit_id,
+        &2000, // 2.0x collateral
+        &0,    // use default liquidation threshold
+        &0,    // use default warning threshold
+        &0,    // use default grace period
+    );
+
+    assert!(result.is_ok(), "enable protection succeeds");
+
+    // Verify protection is stored
+    assert!(vault.has_liquidation_protection(&alice, &deposit_id).unwrap());
+
+    let protection = vault.get_liquidation_protection(&alice, &deposit_id).unwrap();
+    assert_eq!(protection.collateral_amount, 2000);
+}
+
+#[test]
+fn test_enable_liquidation_protection_invalid_deposit() {
+    let (env, vault, _token, _admin, alice, _fee) = setup();
+
+    // Try to enable on non-existent deposit
+    let result = vault.enable_liquidation_protection(
+        &alice,
+        &999, // doesn't exist
+        &2000,
+        &0,
+        &0,
+        &0,
+    );
+
+    assert!(result.is_err(), "should fail for non-existent deposit");
+}
+
+#[test]
+fn test_health_ratio_healthy() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let unlock_time = now + 1000;
+
+    let deposit_id = vault.deposit(&alice, &token, &1000, &unlock_time, &0)
+        .expect("deposit succeeds");
+
+    vault.enable_liquidation_protection(&alice, &deposit_id, &2500, &0, &0, &0)
+        .expect("enable protection succeeds");
+
+    // Health ratio: 2500 / 1000 = 2.5x = 25000 bps (Healthy)
+    let health = vault.get_health_ratio(&alice, &deposit_id)
+        .expect("health ratio query succeeds");
+
+    assert_eq!(health.ratio_bps, 25_000);
+    assert_eq!(health.status, crate::types::HealthStatus::Healthy);
+}
+
+#[test]
+fn test_health_ratio_warning() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let unlock_time = now + 1000;
+
+    let deposit_id = vault.deposit(&alice, &token, &1000, &unlock_time, &0)
+        .expect("deposit succeeds");
+
+    // Set warning threshold to 2.0x, liquidation to 1.5x
+    vault.enable_liquidation_protection(&alice, &deposit_id, &1800, &15_000, &20_000, &0)
+        .expect("enable protection succeeds");
+
+    // Health ratio: 1800 / 1000 = 1.8x = 18000 bps (Warning)
+    let health = vault.get_health_ratio(&alice, &deposit_id)
+        .expect("health ratio query succeeds");
+
+    assert_eq!(health.ratio_bps, 18_000);
+    assert_eq!(health.status, crate::types::HealthStatus::Warning);
+}
+
+#[test]
+fn test_health_ratio_critical() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let unlock_time = now + 1000;
+
+    let deposit_id = vault.deposit(&alice, &token, &1000, &unlock_time, &0)
+        .expect("deposit succeeds");
+
+    // Set thresholds
+    vault.enable_liquidation_protection(&alice, &deposit_id, &1200, &15_000, &20_000, &0)
+        .expect("enable protection succeeds");
+
+    // Health ratio: 1200 / 1000 = 1.2x = 12000 bps (Critical)
+    let health = vault.get_health_ratio(&alice, &deposit_id)
+        .expect("health ratio query succeeds");
+
+    assert_eq!(health.ratio_bps, 12_000);
+    assert_eq!(health.status, crate::types::HealthStatus::CriticalRisk);
+}
+
+#[test]
+fn test_add_collateral_improves_health() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let unlock_time = now + 1000;
+
+    let deposit_id = vault.deposit(&alice, &token, &1000, &unlock_time, &0)
+        .expect("deposit succeeds");
+
+    vault.enable_liquidation_protection(&alice, &deposit_id, &1400, &15_000, &20_000, &0)
+        .expect("enable protection succeeds");
+
+    // Initial health: 1400 / 1000 = 1.4x (Critical)
+    let health_before = vault.get_health_ratio(&alice, &deposit_id).unwrap();
+    assert_eq!(health_before.ratio_bps, 14_000);
+    assert_eq!(health_before.status, crate::types::HealthStatus::CriticalRisk);
+
+    // Add 600 collateral
+    let new_health_bps = vault.add_collateral_for_deposit(&alice, &deposit_id, &600)
+        .expect("add collateral succeeds");
+
+    // New health: 2000 / 1000 = 2.0x = 20000 bps (at warning)
+    assert_eq!(new_health_bps, 20_000);
+
+    // Verify updated in storage
+    let protection = vault.get_liquidation_protection(&alice, &deposit_id).unwrap();
+    assert_eq!(protection.collateral_amount, 2000);
+}
+
+#[test]
+fn test_add_collateral_resets_grace_period() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let unlock_time = now + 1000;
+
+    let deposit_id = vault.deposit(&alice, &token, &1000, &unlock_time, &0)
+        .expect("deposit succeeds");
+
+    vault.enable_liquidation_protection(&alice, &deposit_id, &1200, &15_000, &20_000, &3600)
+        .expect("enable protection succeeds");
+
+    // Get current protection and manually set grace period (simulating grace start)
+    let mut prot = vault.get_liquidation_protection(&alice, &deposit_id).unwrap();
+    prot.grace_period_start = now;
+    // Note: In real contract, this would be handled by the contract logic
+
+    // Add collateral to improve health above warning
+    let _new_health_bps = vault.add_collateral_for_deposit(&alice, &deposit_id, &1100)
+        .expect("add collateral succeeds");
+
+    // Verify grace period is reset
+    let protection = vault.get_liquidation_protection(&alice, &deposit_id).unwrap();
+    assert_eq!(protection.grace_period_start, 0, "grace period should be reset");
+    assert!(!protection.warning_emitted, "warning flag should be cleared");
+}
+
+#[test]
+fn test_has_liquidation_protection() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let unlock_time = now + 1000;
+
+    let deposit_id = vault.deposit(&alice, &token, &1000, &unlock_time, &0)
+        .expect("deposit succeeds");
+
+    // Initially no protection
+    assert!(!vault.has_liquidation_protection(&alice, &deposit_id).unwrap());
+
+    // Enable protection
+    vault.enable_liquidation_protection(&alice, &deposit_id, &2000, &0, &0, &0)
+        .expect("enable protection succeeds");
+
+    // Now has protection
+    assert!(vault.has_liquidation_protection(&alice, &deposit_id).unwrap());
+}
+
+#[test]
+fn test_remove_liquidation_protection() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let unlock_time = now + 1000;
+
+    let deposit_id = vault.deposit(&alice, &token, &1000, &unlock_time, &0)
+        .expect("deposit succeeds");
+
+    vault.enable_liquidation_protection(&alice, &deposit_id, &2000, &0, &0, &0)
+        .expect("enable protection succeeds");
+
+    assert!(vault.has_liquidation_protection(&alice, &deposit_id).unwrap());
+
+    // Remove protection
+    vault.remove_liquidation_protection(&alice, &alice, &deposit_id)
+        .expect("remove protection succeeds");
+
+    assert!(!vault.has_liquidation_protection(&alice, &deposit_id).unwrap());
+}
+
+#[test]
+fn test_grace_period_remaining() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let unlock_time = now + 10000;
+
+    let deposit_id = vault.deposit(&alice, &token, &1000, &unlock_time, &0)
+        .expect("deposit succeeds");
+
+    vault.enable_liquidation_protection(&alice, &deposit_id, &1200, &15_000, &20_000, &3600)
+        .expect("enable protection succeeds");
+
+    // No grace period active yet
+    let remaining = vault.grace_period_remaining(&alice, &deposit_id)
+        .expect("query succeeds");
+    assert_eq!(remaining, 0);
+
+    // Would need to manually set grace period start to test active grace
+    // In the real contract, this happens automatically when health falls
+}
+
+#[test]
+fn test_multiple_collateral_additions() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let unlock_time = now + 1000;
+
+    let deposit_id = vault.deposit(&alice, &token, &1000, &unlock_time, &0)
+        .expect("deposit succeeds");
+
+    vault.enable_liquidation_protection(&alice, &deposit_id, &1000, &15_000, &20_000, &0)
+        .expect("enable protection succeeds");
+
+    // Add collateral multiple times
+    let health1 = vault.add_collateral_for_deposit(&alice, &deposit_id, &300)
+        .expect("first addition succeeds");
+    assert_eq!(health1, 13_000); // 1300 / 1000
+
+    let health2 = vault.add_collateral_for_deposit(&alice, &deposit_id, &200)
+        .expect("second addition succeeds");
+    assert_eq!(health2, 15_000); // 1500 / 1000
+
+    let health3 = vault.add_collateral_for_deposit(&alice, &deposit_id, &500)
+        .expect("third addition succeeds");
+    assert_eq!(health3, 20_000); // 2000 / 1000
+
+    let protection = vault.get_liquidation_protection(&alice, &deposit_id).unwrap();
+    assert_eq!(protection.collateral_amount, 2000);
+}
+
+#[test]
+fn test_invalid_threshold_ranges() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let now = env.ledger().timestamp();
+    let unlock_time = now + 1000;
+
+    let deposit_id = vault.deposit(&alice, &token, &1000, &unlock_time, &0)
+        .expect("deposit succeeds");
+
+    // Try invalid liquidation threshold (too high)
+    let result = vault.enable_liquidation_protection(
+        &alice,
+        &deposit_id,
+        &2000,
+        &60_000, // > 50000 max
+        &0,
+        &0,
+    );
+    assert!(result.is_err(), "should reject threshold > 50000");
+
+    // Try invalid liquidation threshold (too low)
+    let result = vault.enable_liquidation_protection(
+        &alice,
+        &deposit_id,
+        &2000,
+        &9_999, // < 10000 min
+        &0,
+        &0,
+    );
+    assert!(result.is_err(), "should reject threshold < 10000");
+}

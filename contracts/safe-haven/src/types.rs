@@ -91,6 +91,8 @@ pub enum VaultKey {
     StakerRewardsClaimed(Address),
     /// NFT evolution record: maps (depositor, deposit_id) to NFTEvolutionRecord
     NFTEvolution(Address, u32),
+    /// Liquidation protection record: maps (depositor, deposit_id) to LiquidationProtection
+    LiquidationProtection(Address, u32),
 }
 
 #[contracttype]
@@ -105,6 +107,10 @@ pub struct VaultEntry {
     pub compound_frequency_secs: u64,
     /// Timestamp of last compound accrual (issue #332).
     pub last_accrual_timestamp: u64,
+    /// Collateral amount for liquidation protection (0 if not collateralized)
+    pub collateral_amount: i128,
+    /// Liquidation threshold in basis points (0 if not collateralized)
+    pub liquidation_threshold_bps: u32,
 }
 
 #[contracttype]
@@ -115,6 +121,10 @@ pub struct LedgerVaultEntry {
     pub unlock_ledger: u32,
     pub depositor: Address,
     pub penalty_bps: u32,
+    /// Collateral amount for liquidation protection (0 if not collateralized)
+    pub collateral_amount: i128,
+    /// Liquidation threshold in basis points (0 if not collateralized)
+    pub liquidation_threshold_bps: u32,
 }
 
 /// A single token+amount pair used in multi-token deposits (issue #330).
@@ -138,6 +148,10 @@ pub struct MultiTokenVaultEntry {
     pub compound_frequency_secs: u64,
     /// Timestamp of last compound accrual (issue #332).
     pub last_accrual_timestamp: u64,
+    /// Collateral amount for liquidation protection (0 if not collateralized)
+    pub collateral_amount: i128,
+    /// Liquidation threshold in basis points (0 if not collateralized)
+    pub liquidation_threshold_bps: u32,
 }
 
 /// The deposit type discriminant returned by `get_deposit_type`.
@@ -223,4 +237,71 @@ pub struct SponsorshipEligibility {
 
     /// Amount available for this user today
     pub available_today: i128,
+}
+
+// ================================================================
+//  Liquidation Protection Types
+// ================================================================
+
+/// Health status of a collateralized deposit
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HealthStatus {
+    /// Collateral is safe; health ratio > warning threshold
+    Healthy,
+    /// Collateral is at warning level; health ratio between warning and liquidation threshold
+    Warning,
+    /// Collateral is at liquidation risk; health ratio <= liquidation threshold
+    CriticalRisk,
+    /// Grace period is active; depositor has time to add collateral
+    GracePeriod,
+    /// Liquidation threshold has been breached and grace period has expired
+    Liquidatable,
+}
+
+/// Liquidation protection configuration for a collateralized deposit
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiquidationProtection {
+    /// Collateral amount (in contract base units)
+    pub collateral_amount: i128,
+
+    /// Liquidation threshold as basis points (e.g., 15000 = 1.5x)
+    pub liquidation_threshold_bps: u32,
+
+    /// Warning threshold as basis points (e.g., 20000 = 2.0x)
+    pub warning_threshold_bps: u32,
+
+    /// Grace period duration in seconds
+    pub grace_period_secs: u64,
+
+    /// Timestamp when grace period started (0 if not in grace period)
+    pub grace_period_start: u64,
+
+    /// Flag indicating if a liquidation warning has been emitted
+    pub warning_emitted: bool,
+
+    /// Timestamp of last grace period reset
+    pub last_grace_period_reset: u64,
+}
+
+/// Result of health ratio calculation
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HealthRatio {
+    /// Health ratio in basis points (e.g., 150 = 1.5x)
+    /// Formula: (collateral_amount / deposit_amount) * 10000
+    pub ratio_bps: u32,
+
+    /// Current health status
+    pub status: HealthStatus,
+
+    /// Current collateral amount
+    pub collateral_amount: i128,
+
+    /// Current deposit amount (liabilities)
+    pub deposit_amount: i128,
+
+    /// Time remaining in grace period (0 if not in grace period)
+    pub grace_period_remaining_secs: u64,
 }

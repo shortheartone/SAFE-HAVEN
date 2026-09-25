@@ -1186,3 +1186,53 @@ pub fn remove_nft_evolution(env: &Env, depositor: &Address, deposit_id: u32) {
     let key = crate::types::VaultKey::NFTEvolution(depositor.clone(), deposit_id);
     env.storage().persistent().remove(&key);
 }
+
+// ================================================================
+//  Liquidation Protection helpers
+// ================================================================
+
+/// Store liquidation protection record for a deposit.
+pub fn set_liquidation_protection(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    protection: &crate::types::LiquidationProtection,
+) {
+    let key = crate::types::VaultKey::LiquidationProtection(depositor.clone(), deposit_id);
+    env.storage().persistent().set(&key, protection);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+/// Retrieve liquidation protection record (mutable path — extends TTL).
+pub fn get_liquidation_protection(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+) -> Option<crate::types::LiquidationProtection> {
+    let key = crate::types::VaultKey::LiquidationProtection(depositor.clone(), deposit_id);
+    let protection: Option<crate::types::LiquidationProtection> = env.storage().persistent().get(&key);
+    if protection.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    }
+    protection
+}
+
+/// Retrieve liquidation protection record (read-only — does not extend TTL).
+pub fn get_liquidation_protection_readonly(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+) -> Option<crate::types::LiquidationProtection> {
+    let key = crate::types::VaultKey::LiquidationProtection(depositor.clone(), deposit_id);
+    env.storage().persistent().get(&key)
+}
+
+/// Remove liquidation protection record from storage.
+pub fn remove_liquidation_protection(env: &Env, depositor: &Address, deposit_id: u32) {
+    let key = crate::types::VaultKey::LiquidationProtection(depositor.clone(), deposit_id);
+    env.storage().persistent().remove(&key);
+}

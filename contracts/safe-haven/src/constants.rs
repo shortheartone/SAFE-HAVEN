@@ -32,3 +32,27 @@ pub const STAKER_PENALTY_BPS: u32 = 7_000;
 
 /// Fee recipient penalty split: percentage of penalties allocated to fee recipient (30% = 3000 basis points)
 pub const FEE_RECIPIENT_PENALTY_BPS: u32 = 3_000;
+
+// ----------------------------------------------------------------
+//  Liquidation Protection Constants
+// ----------------------------------------------------------------
+
+/// Default liquidation threshold: health ratio below this triggers liquidation (e.g., 150 = 1.5x)
+/// Expressed in basis points: 15000 = 1.50
+pub const DEFAULT_LIQUIDATION_THRESHOLD_BPS: u32 = 15_000;
+
+/// Default warning threshold: health ratio below this triggers warning (e.g., 200 = 2.0x)
+/// Expressed in basis points: 20000 = 2.00
+pub const DEFAULT_WARNING_THRESHOLD_BPS: u32 = 20_000;
+
+/// Default grace period before liquidation can be executed (in seconds)
+/// 7 days = 604800 seconds
+pub const DEFAULT_GRACE_PERIOD_SECS: u64 = 604_800;
+
+/// Minimum grace period (in seconds)
+/// 1 hour = 3600 seconds
+pub const MIN_GRACE_PERIOD_SECS: u64 = 3_600;
+
+/// Maximum grace period (in seconds)
+/// 30 days = 2592000 seconds
+pub const MAX_GRACE_PERIOD_SECS: u64 = 2_592_000;

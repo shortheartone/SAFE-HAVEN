@@ -14,6 +14,7 @@ mod constants;
 mod contract;
 mod errors;
 mod events;
+mod liquidation;
 mod nft;
 mod storage;
 mod types;

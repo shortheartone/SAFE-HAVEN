@@ -43,4 +43,18 @@ pub enum VaultError {
     PotentialSybilAttack = 25,
     /// Sponsorship configuration error
     InvalidSponsorshipConfig = 26,
+    /// Collateral insufficient to meet health ratio requirement
+    InsufficientCollateral = 27,
+    /// Deposit is not collateralized
+    NotCollateralized = 28,
+    /// Liquidation protection not enabled for this deposit
+    LiquidationProtectionNotEnabled = 29,
+    /// Grace period is not active
+    NoGracePeriodActive = 30,
+    /// Grace period has not expired yet (liquidation cannot proceed)
+    GracePeriodNotExpired = 31,
+    /// Invalid liquidation threshold (must be between 10000 and 50000 bps)
+    InvalidLiquidationThreshold = 32,
+    /// Invalid grace period (must be between MIN and MAX grace period secs)
+    InvalidGracePeriod = 33,
 }

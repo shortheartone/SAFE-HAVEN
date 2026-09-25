@@ -221,3 +221,107 @@ pub fn nft_evolved(
     env.events()
         .publish(topics, (deposit_id, old_stage, new_stage, rarity));
 }
+
+// ================================================================
+//  Liquidation Protection Events
+// ================================================================
+
+/// Emitted when liquidation protection is enabled for a deposit.
+/// Signals that a deposit now has collateral backing and liquidation thresholds.
+pub fn liquidation_protected(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    collateral_amount: i128,
+    liquidation_threshold_bps: u32,
+    warning_threshold_bps: u32,
+    grace_period_secs: u64,
+) {
+    let topics = (Symbol::new(env, "liq_protected"), depositor.clone());
+    env.events().publish(
+        topics,
+        (
+            deposit_id,
+            collateral_amount,
+            liquidation_threshold_bps,
+            warning_threshold_bps,
+            grace_period_secs,
+        ),
+    );
+}
+
+/// Emitted when a deposit's health ratio falls below the warning threshold.
+/// This signals to the depositor that they should consider adding more collateral.
+pub fn liquidation_warning(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    health_ratio_bps: u32,
+    warning_threshold_bps: u32,
+    collateral_amount: i128,
+    deposit_amount: i128,
+) {
+    let topics = (Symbol::new(env, "liq_warning"), depositor.clone());
+    env.events().publish(
+        topics,
+        (
+            deposit_id,
+            health_ratio_bps,
+            warning_threshold_bps,
+            collateral_amount,
+            deposit_amount,
+        ),
+    );
+}
+
+/// Emitted when a deposit enters the grace period.
+/// Signals that liquidation is at critical risk and the grace period has been started.
+pub fn grace_period_started(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    grace_period_expires_at: u64,
+    health_ratio_bps: u32,
+) {
+    let topics = (Symbol::new(env, "grace_period_start"), depositor.clone());
+    env.events().publish(
+        topics,
+        (deposit_id, grace_period_expires_at, health_ratio_bps),
+    );
+}
+
+/// Emitted when collateral is added to a deposit during or after the grace period.
+pub fn collateral_added(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    additional_collateral: i128,
+    new_collateral_total: i128,
+    new_health_ratio_bps: u32,
+) {
+    let topics = (Symbol::new(env, "collateral_added"), depositor.clone());
+    env.events().publish(
+        topics,
+        (
+            deposit_id,
+            additional_collateral,
+            new_collateral_total,
+            new_health_ratio_bps,
+        ),
+    );
+}
+
+/// Emitted when liquidation is executed on a deposit.
+pub fn liquidation_executed(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    collateral_seized: i128,
+    liquidation_fee: i128,
+) {
+    let topics = (Symbol::new(env, "liquidation_exec"), depositor.clone());
+    env.events().publish(
+        topics,
+        (deposit_id, collateral_seized, liquidation_fee),
+    );
+}

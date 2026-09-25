@@ -2691,4 +2691,253 @@ impl SafeHaven {
         storage::get_nft_evolution_readonly(&env, &depositor, deposit_id)
             .map(|record| record.evolution_count)
     }
+
+    // ================================================================
+    //  Liquidation Protection Functions
+    // ================================================================
+
+    /// Enable liquidation protection for a collateralized deposit.
+    ///
+    /// Sets up liquidation thresholds, warning thresholds, and grace period
+    /// for a deposit that will be backed by collateral.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment
+    /// * `depositor` - Address of the depositor (must sign)
+    /// * `deposit_id` - ID of the deposit to protect
+    /// * `collateral_amount` - Amount of collateral backing this deposit
+    /// * `liquidation_threshold_bps` - Custom liquidation threshold (0 for default 1.5x)
+    /// * `warning_threshold_bps` - Custom warning threshold (0 for default 2.0x)
+    /// * `grace_period_secs` - Custom grace period (0 for default 7 days)
+    ///
+    /// # Returns
+    /// Ok(()) on success
+    pub fn enable_liquidation_protection(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+        collateral_amount: i128,
+        liquidation_threshold_bps: u32,
+        warning_threshold_bps: u32,
+        grace_period_secs: u64,
+    ) -> Result<(), VaultError> {
+        depositor.require_auth();
+
+        if collateral_amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+
+        // Verify deposit exists
+        let _ = storage::get_deposit(&env, &depositor, deposit_id)
+            .ok_or(VaultError::NoDepositFound)?;
+
+        // Create and validate liquidation protection
+        let protection = crate::liquidation::create_liquidation_protection(
+            collateral_amount,
+            liquidation_threshold_bps,
+            warning_threshold_bps,
+            grace_period_secs,
+        )?;
+
+        // Store liquidation protection
+        storage::set_liquidation_protection(&env, &depositor, deposit_id, &protection);
+
+        let now = env.ledger().timestamp();
+        events::liquidation_protected(
+            &env,
+            &depositor,
+            deposit_id,
+            collateral_amount,
+            protection.liquidation_threshold_bps,
+            protection.warning_threshold_bps,
+            protection.grace_period_secs,
+        );
+
+        Ok(())
+    }
+
+    /// Get health ratio for a collateralized deposit.
+    ///
+    /// Calculates the current health ratio based on collateral and deposit amounts,
+    /// and returns the health status.
+    ///
+    /// # Returns
+    /// HealthRatio struct with ratio, status, and grace period info
+    pub fn get_health_ratio(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Result<crate::types::HealthRatio, VaultError> {
+        let protection = storage::get_liquidation_protection_readonly(&env, &depositor, deposit_id)
+            .ok_or(VaultError::LiquidationProtectionNotEnabled)?;
+
+        let vault_entry = storage::get_deposit_readonly(&env, &depositor, deposit_id)
+            .ok_or(VaultError::NoDepositFound)?;
+
+        let now = env.ledger().timestamp();
+
+        Ok(crate::liquidation::calculate_health_ratio(
+            protection.collateral_amount,
+            vault_entry.amount,
+            protection.liquidation_threshold_bps,
+            protection.warning_threshold_bps,
+            protection.grace_period_start,
+            protection.grace_period_secs,
+            now,
+        ))
+    }
+
+    /// Add collateral to a deposit during grace period.
+    ///
+    /// When a deposit enters grace period (health ratio falls below liquidation threshold),
+    /// the depositor can add more collateral to improve health and avoid liquidation.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment
+    /// * `depositor` - Address of the depositor (must sign)
+    /// * `deposit_id` - ID of the deposit
+    /// * `additional_collateral_amount` - Amount of collateral to add
+    ///
+    /// # Returns
+    /// Ok(new_health_ratio_bps) on success
+    pub fn add_collateral_for_deposit(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+        additional_collateral_amount: i128,
+    ) -> Result<u32, VaultError> {
+        depositor.require_auth();
+
+        if additional_collateral_amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+
+        let mut protection = storage::get_liquidation_protection(&env, &depositor, deposit_id)
+            .ok_or(VaultError::LiquidationProtectionNotEnabled)?;
+
+        let vault_entry = storage::get_deposit(&env, &depositor, deposit_id)
+            .ok_or(VaultError::NoDepositFound)?;
+
+        // Calculate new health ratio after adding collateral
+        let new_health_bps = crate::liquidation::add_collateral_during_grace_period(
+            &mut protection,
+            additional_collateral_amount,
+            vault_entry.amount,
+        )?;
+
+        // Save updated protection
+        storage::set_liquidation_protection(&env, &depositor, deposit_id, &protection);
+
+        let now = env.ledger().timestamp();
+        events::collateral_added(
+            &env,
+            &depositor,
+            deposit_id,
+            additional_collateral_amount,
+            protection.collateral_amount,
+            new_health_bps,
+        );
+
+        Ok(new_health_bps)
+    }
+
+    /// Check if a deposit has liquidation protection enabled.
+    ///
+    /// # Returns
+    /// true if liquidation protection is enabled, false otherwise
+    pub fn has_liquidation_protection(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> bool {
+        storage::get_liquidation_protection_readonly(&env, &depositor, deposit_id).is_some()
+    }
+
+    /// Get liquidation protection details for a deposit.
+    ///
+    /// # Returns
+    /// LiquidationProtection struct if enabled, None otherwise
+    pub fn get_liquidation_protection(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Option<crate::types::LiquidationProtection> {
+        storage::get_liquidation_protection_readonly(&env, &depositor, deposit_id)
+    }
+
+    /// Check if a deposit is in grace period.
+    ///
+    /// Grace period is active when health ratio falls below liquidation threshold
+    /// and the depositor has been given time to add collateral.
+    ///
+    /// # Returns
+    /// true if in active grace period, false otherwise
+    pub fn is_in_grace_period(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Result<bool, VaultError> {
+        let protection = storage::get_liquidation_protection_readonly(&env, &depositor, deposit_id)
+            .ok_or(VaultError::LiquidationProtectionNotEnabled)?;
+
+        let now = env.ledger().timestamp();
+        Ok(crate::liquidation::is_in_grace_period(&protection, now))
+    }
+
+    /// Get time remaining in grace period (in seconds).
+    ///
+    /// Returns 0 if grace period is not active or has expired.
+    ///
+    /// # Returns
+    /// Seconds remaining, or 0 if no active grace period
+    pub fn grace_period_remaining(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Result<u64, VaultError> {
+        let protection = storage::get_liquidation_protection_readonly(&env, &depositor, deposit_id)
+            .ok_or(VaultError::LiquidationProtectionNotEnabled)?;
+
+        if protection.grace_period_start == 0 {
+            return Ok(0);
+        }
+
+        let now = env.ledger().timestamp();
+        let grace_end = protection.grace_period_start.saturating_add(protection.grace_period_secs);
+
+        if now >= grace_end {
+            Ok(0)
+        } else {
+            Ok(grace_end.saturating_sub(now))
+        }
+    }
+
+    /// Remove liquidation protection from a deposit.
+    ///
+    /// Called when deposit is withdrawn or liquidation is resolved.
+    /// Only the admin or depositor can remove protection.
+    ///
+    /// # Arguments
+    /// * `depositor_or_admin` - Either the depositor or admin (must sign)
+    pub fn remove_liquidation_protection(
+        env: Env,
+        depositor_or_admin: Address,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Result<(), VaultError> {
+        depositor_or_admin.require_auth();
+
+        // Only allow depositor or admin
+        let is_depositor = &depositor_or_admin == &depositor;
+        let is_admin = storage::get_admin(&env)
+            .map(|admin| admin == depositor_or_admin)
+            .unwrap_or(false);
+
+        if !is_depositor && !is_admin {
+            return Err(VaultError::Unauthorized);
+        }
+
+        storage::remove_liquidation_protection(&env, &depositor, deposit_id);
+        Ok(())
+    }
 }
