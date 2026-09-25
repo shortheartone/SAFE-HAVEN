@@ -160,10 +160,104 @@ pub struct StakerEntry {
     pub stake_amount: i128,
 }
 
-/// Deposit type indicator — distinguishes between timestamp-based and ledger-based deposits
+/// Benchmark index options for performance comparison
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DepositType {
-    TimeBased,
-    LedgerBased,
+pub enum BenchmarkIndex {
+    /// 5% annual interest (contract's default rate)
+    ContractDefault,
+    /// Stellar inflation rate (~1%)
+    StellarInflation,
+    /// Money market rate (~2%)
+    MoneyMarket,
+    /// S&P 500 average (~10%)
+    SAndP500,
+    /// Custom fixed rate in basis points (e.g., 300 = 3%)
+    Custom(u32),
+}
+
+/// Performance metrics for a single deposit
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DepositPerformance {
+    /// Original deposit amount
+    pub principal: i128,
+    /// Current value including accrued interest
+    pub current_value: i128,
+    /// Total gain in absolute terms
+    pub absolute_gain: i128,
+    /// Return percentage in basis points (e.g., 500 = 5%)
+    pub return_bps: u32,
+    /// Time-weighted return in basis points
+    pub time_weighted_return_bps: u32,
+    /// Accrued interest not yet withdrawn
+    pub accrued_interest: i128,
+    /// Compound interest earned
+    pub compound_interest: i128,
+    /// Total fees paid (penalty, if any)
+    pub total_fees_paid: i128,
+    /// Whether this deposit is unlocked (past unlock time)
+    pub is_unlocked: bool,
+    /// Time remaining in seconds (0 if unlocked)
+    pub time_remaining_secs: u64,
+    /// Benchmark return comparison in basis points
+    pub benchmark_return_bps: u32,
+    /// Performance vs benchmark in basis points (can be negative)
+    pub outperformance_bps: i32,
+    /// Estimated gas cost for this deposit in stroops
+    pub estimated_gas_cost: i128,
+    /// Return on gas (ROG): return per unit of gas cost
+    pub return_on_gas: i128,
+}
+
+/// Aggregated performance metrics for a depositor across all deposits
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DepositorPerformanceSummary {
+    /// Number of active deposits
+    pub deposit_count: u32,
+    /// Total principal across all deposits
+    pub total_principal: i128,
+    /// Total current value across all deposits
+    pub total_current_value: i128,
+    /// Aggregate absolute gain
+    pub total_absolute_gain: i128,
+    /// Weighted average return percentage in basis points
+    pub weighted_avg_return_bps: u32,
+    /// Average time-weighted return across deposits
+    pub avg_time_weighted_return_bps: u32,
+    /// Total accrued interest across all deposits
+    pub total_accrued_interest: i128,
+    /// Total compound interest earned
+    pub total_compound_interest: i128,
+    /// Total fees paid across all deposits
+    pub total_fees_paid: i128,
+    /// Number of unlocked deposits
+    pub unlocked_deposit_count: u32,
+    /// Total value available (from unlocked deposits)
+    pub total_unlocked_value: i128,
+    /// Number of locked deposits
+    pub locked_deposit_count: u32,
+    /// Average benchmark return
+    pub avg_benchmark_return_bps: u32,
+    /// Portfolio outperformance vs benchmark in basis points
+    pub portfolio_outperformance_bps: i32,
+    /// Total estimated gas cost for all deposits
+    pub total_estimated_gas_cost: i128,
+    /// Average return on gas across deposits
+    pub avg_return_on_gas: i128,
+}
+
+/// Performance metrics comparison between two deposits or benchmarks
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PerformanceComparison {
+    /// Return percentage of first deposit/benchmark
+    pub first_return_bps: u32,
+    /// Return percentage of second deposit/benchmark
+    pub second_return_bps: u32,
+    /// Difference in basis points (can be negative)
+    pub difference_bps: i32,
+    /// Whether first outperforms second
+    pub first_outperforms: bool,
 }

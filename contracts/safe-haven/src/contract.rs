@@ -1762,6 +1762,80 @@ impl SafeHaven {
         results
     }
 
+    // ================================================================
+    //  Performance Analytics
+    // ================================================================
+
+    /// Calculate comprehensive performance metrics for a depositor's deposits.
+    /// 
+    /// Returns aggregated performance summary across all active deposits, including:
+    /// - Total returns and absolute gains
+    /// - Time-weighted returns (annualized)
+    /// - Benchmark comparisons against a configurable index
+    /// - Gas efficiency metrics
+    /// - Locked vs unlocked deposit breakdown
+    ///
+    /// # Parameters
+    /// - `depositor`     — account to analyze; no auth required (read-only query)
+    /// - `benchmark`     — benchmark index for comparison (e.g., S&P 500, contract default rate)
+    ///
+    /// # Returns
+    /// `DepositorPerformanceSummary` with aggregated metrics, or an error if calculation fails.
+    pub fn get_performance_metrics(
+        env: Env,
+        depositor: Address,
+        benchmark: crate::types::BenchmarkIndex,
+    ) -> Result<crate::types::DepositorPerformanceSummary, VaultError> {
+        let deposit_ids = storage::get_deposit_ids(&env, &depositor);
+        let current_time = env.ledger().timestamp();
+        let current_ledger = env.ledger().sequence();
+
+        let mut performances: Vec<crate::types::DepositPerformance> = Vec::new(&env);
+
+        // Collect performance for each deposit (timestamp-based, ledger-based, or multi-token)
+        for deposit_id in deposit_ids.iter() {
+            // Try timestamp-based deposit
+            if let Some(entry) = storage::get_deposit_readonly(&env, &depositor, deposit_id) {
+                let perf = crate::performance::calculate_deposit_performance(
+                    &env,
+                    &entry,
+                    current_time,
+                    &benchmark,
+                );
+                performances.push_back(perf);
+                continue;
+            }
+
+            // Try multi-token deposit
+            if let Some(entry) = storage::get_multi_deposit_readonly(&env, &depositor, deposit_id) {
+                let perf = crate::performance::calculate_multi_token_deposit_performance(
+                    &env,
+                    &entry,
+                    current_time,
+                    &benchmark,
+                );
+                performances.push_back(perf);
+                continue;
+            }
+
+            // Try ledger-based deposit
+            if let Some(entry) = storage::get_deposit_by_ledger_readonly(&env, &depositor, deposit_id) {
+                let perf = crate::performance::calculate_ledger_deposit_performance(
+                    &env,
+                    &entry,
+                    current_time,
+                    current_ledger,
+                    &benchmark,
+                );
+                performances.push_back(perf);
+            }
+        }
+
+        // Aggregate all individual performances into summary
+        let summary = crate::performance::calculate_depositor_summary(&env, &performances);
+        Ok(summary)
+    }
+
     // ----------------------------------------------------------------
     //  Admin: Storage migration
     // ----------------------------------------------------------------

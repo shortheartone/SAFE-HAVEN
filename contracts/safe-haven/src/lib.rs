@@ -14,6 +14,7 @@ mod constants;
 mod contract;
 mod errors;
 mod events;
+mod performance;
 mod storage;
 mod types;
 
@@ -23,7 +24,9 @@ pub use constants::{
 };
 
 pub use types::{
-    DepositType, MultiTokenVaultEntry, Page, TokenDeposit, STORAGE_VERSION, MAX_TOKENS_PER_DEPOSIT,
+    BenchmarkIndex, DepositPerformance, DepositorPerformanceSummary, DepositType,
+    MultiTokenVaultEntry, Page, PerformanceComparison, TokenDeposit, STORAGE_VERSION,
+    MAX_TOKENS_PER_DEPOSIT,
 };
 
 pub use contract::SafeHaven;

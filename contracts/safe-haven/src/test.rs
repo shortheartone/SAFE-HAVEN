@@ -72,7 +72,7 @@ use crate::{
     constants::MIN_LOCK_LEDGERS,
     contract::{SafeHaven, SafeHavenClient},
     errors::VaultError,
-    types::{DepositType, VaultEntry, VaultKey, MAX_DEPOSIT_AMOUNT, MAX_LOCK_DURATION_SECS},
+    types::{BenchmarkIndex, DepositType, TokenDeposit, VaultEntry, VaultKey, MAX_DEPOSIT_AMOUNT, MAX_LOCK_DURATION_SECS},
 };
 
 fn setup() -> (
@@ -4760,4 +4760,223 @@ fn test_emergency_withdrawal_mixed_deposit_types_same_ledger() {
     // Verify total tracking
     let total = vault.get_emergency_withdrawal_total(&env, env.ledger().sequence());
     assert_eq!(total, 50_000);
+}
+
+
+// ================================================================
+//  Performance Analytics Tests
+// ================================================================
+
+#[test]
+fn test_performance_metrics_basic_single_deposit() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let deposit_amount = 1_000_000;
+    let _deposit_id = vault.deposit(&alice, &token, &deposit_amount, &unlock_time, &0);
+
+    // Query performance metrics
+    let benchmark = BenchmarkIndex::ContractDefault;
+    let result = vault.try_get_performance_metrics(&alice, &benchmark);
+    assert!(result.is_ok());
+
+    let summary = result.unwrap();
+    assert_eq!(summary.deposit_count, 1);
+    assert_eq!(summary.total_principal, deposit_amount);
+    assert_eq!(summary.total_current_value, deposit_amount); // No time has passed
+    assert_eq!(summary.total_absolute_gain, 0);
+    assert_eq!(summary.locked_deposit_count, 1);
+    assert_eq!(summary.unlocked_deposit_count, 0);
+}
+
+#[test]
+fn test_performance_metrics_multiple_deposits() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    StellarAssetClient::new(&env, &token).mint(&alice, &50_000_000);
+
+    let unlock_time1 = env.ledger().timestamp() + 3600;
+    let unlock_time2 = env.ledger().timestamp() + 7200;
+    
+    let amount1 = 5_000_000;
+    let amount2 = 3_000_000;
+
+    let _id1 = vault.deposit(&alice, &token, &amount1, &unlock_time1, &0);
+    let _id2 = vault.deposit(&alice, &token, &amount2, &unlock_time2, &0);
+
+    // Query aggregated performance
+    let benchmark = BenchmarkIndex::ContractDefault;
+    let result = vault.try_get_performance_metrics(&alice, &benchmark);
+    assert!(result.is_ok());
+
+    let summary = result.unwrap();
+    assert_eq!(summary.deposit_count, 2);
+    assert_eq!(summary.total_principal, amount1 + amount2);
+    assert_eq!(summary.total_current_value, amount1 + amount2);
+    assert_eq!(summary.locked_deposit_count, 2);
+    assert_eq!(summary.unlocked_deposit_count, 0);
+}
+
+#[test]
+fn test_performance_metrics_benchmark_comparison() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let unlock_time = env.ledger().timestamp() + 31_536_000; // 1 year
+    let deposit_amount = 1_000_000;
+    
+    let _deposit_id = vault.deposit(&alice, &token, &deposit_amount, &unlock_time, &0);
+
+    // Test different benchmarks
+    let benchmarks = vec![
+        BenchmarkIndex::ContractDefault,
+        BenchmarkIndex::StellarInflation,
+        BenchmarkIndex::MoneyMarket,
+        BenchmarkIndex::SAndP500,
+        BenchmarkIndex::Custom(300), // 3%
+    ];
+
+    for benchmark in benchmarks {
+        let result = vault.try_get_performance_metrics(&alice, &benchmark);
+        assert!(result.is_ok());
+        
+        let summary = result.unwrap();
+        assert_eq!(summary.deposit_count, 1);
+        assert!(summary.avg_benchmark_return_bps >= 0);
+    }
+}
+
+#[test]
+fn test_performance_metrics_empty_depositor() {
+    let (env, vault, _token, _admin, _alice, _fee) = setup();
+    
+    let bob = Address::generate(&env);
+
+    let benchmark = BenchmarkIndex::ContractDefault;
+    let result = vault.try_get_performance_metrics(&bob, &benchmark);
+    assert!(result.is_ok());
+
+    let summary = result.unwrap();
+    assert_eq!(summary.deposit_count, 0);
+    assert_eq!(summary.total_principal, 0);
+    assert_eq!(summary.total_current_value, 0);
+    assert_eq!(summary.weighted_avg_return_bps, 0);
+}
+
+#[test]
+fn test_performance_metrics_unlocked_deposits() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let unlock_time = env.ledger().timestamp() + 100; // Very short lock
+    let deposit_amount = 2_000_000;
+    
+    let _deposit_id = vault.deposit(&alice, &token, &deposit_amount, &unlock_time, &0);
+
+    // Advance time past unlock
+    env.ledger().with_timestamp(unlock_time + 1);
+
+    let benchmark = BenchmarkIndex::ContractDefault;
+    let result = vault.try_get_performance_metrics(&alice, &benchmark);
+    assert!(result.is_ok());
+
+    let summary = result.unwrap();
+    assert_eq!(summary.deposit_count, 1);
+    assert_eq!(summary.unlocked_deposit_count, 1);
+    assert_eq!(summary.locked_deposit_count, 0);
+    assert_eq!(summary.total_unlocked_value, deposit_amount);
+}
+
+#[test]
+fn test_performance_metrics_gas_efficiency() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let deposit_amount = 100_000_000; // Large deposit for better ROG
+    
+    let _deposit_id = vault.deposit(&alice, &token, &deposit_amount, &unlock_time, &0);
+
+    let benchmark = BenchmarkIndex::ContractDefault;
+    let result = vault.try_get_performance_metrics(&alice, &benchmark);
+    assert!(result.is_ok());
+
+    let summary = result.unwrap();
+    assert!(summary.total_estimated_gas_cost > 0);
+    // ROG should be total_gain / total_gas_cost
+    // Since no time has passed, ROG should be 0 or very small
+    assert!(summary.avg_return_on_gas >= 0);
+}
+
+#[test]
+fn test_performance_metrics_mixed_locked_unlocked() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    StellarAssetClient::new(&env, &token).mint(&alice, &20_000_000);
+
+    let current_time = env.ledger().timestamp();
+    
+    // Locked deposit
+    let unlock_time1 = current_time + 7200;
+    let amount1 = 5_000_000;
+    let _id1 = vault.deposit(&alice, &token, &amount1, &unlock_time1, &0);
+    
+    // Unlocked deposit
+    let unlock_time2 = current_time - 100; // Already unlocked
+    let amount2 = 3_000_000;
+    let _id2 = vault.deposit(&alice, &token, &amount2, &unlock_time2, &0);
+
+    let benchmark = BenchmarkIndex::ContractDefault;
+    let result = vault.try_get_performance_metrics(&alice, &benchmark);
+    assert!(result.is_ok());
+
+    let summary = result.unwrap();
+    assert_eq!(summary.deposit_count, 2);
+    assert_eq!(summary.locked_deposit_count, 1);
+    assert_eq!(summary.unlocked_deposit_count, 1);
+    assert_eq!(summary.total_unlocked_value, amount2);
+}
+
+#[test]
+fn test_performance_metrics_ledger_based_deposit() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let unlock_ledger = env.ledger().sequence() + 20;
+    let deposit_amount = 5_000_000;
+    
+    let _deposit_id = vault.deposit_by_ledger(&alice, &token, &deposit_amount, &unlock_ledger, &0);
+
+    let benchmark = BenchmarkIndex::ContractDefault;
+    let result = vault.try_get_performance_metrics(&alice, &benchmark);
+    assert!(result.is_ok());
+
+    let summary = result.unwrap();
+    assert_eq!(summary.deposit_count, 1);
+    assert_eq!(summary.total_principal, deposit_amount);
+    assert_eq!(summary.total_current_value, deposit_amount);
+    assert_eq!(summary.locked_deposit_count, 1);
+}
+
+#[test]
+fn test_performance_metrics_outperformance_calculation() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let unlock_time = env.ledger().timestamp() + 31_536_000; // 1 year
+    let deposit_amount = 1_000_000;
+    
+    let _deposit_id = vault.deposit(&alice, &token, &deposit_amount, &unlock_time, &0);
+
+    // Compare against a low benchmark
+    let low_benchmark = BenchmarkIndex::StellarInflation; // 1% p.a.
+    let result = vault.try_get_performance_metrics(&alice, &low_benchmark);
+    assert!(result.is_ok());
+
+    let summary_low = result.unwrap();
+    
+    // Compare against a high benchmark
+    let high_benchmark = BenchmarkIndex::SAndP500; // 10% p.a.
+    let result = vault.try_get_performance_metrics(&alice, &high_benchmark);
+    assert!(result.is_ok());
+
+    let summary_high = result.unwrap();
+    
+    // With low benchmark, outperformance should be higher (or equal)
+    assert!(summary_low.portfolio_outperformance_bps >= summary_high.portfolio_outperformance_bps);
 }
