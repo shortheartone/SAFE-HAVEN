@@ -231,6 +231,39 @@ pub fn withdraw_to(
         token.clone(),
     );
     env.events().publish(topics, (recipient.clone(), amount));
+
+pub fn oracle_configured(env: &Env, admin: &Address, token: &Address, oracle: &Address) {
+    let topics = (Symbol::new(env, "oracle_conf"), token.clone());
+    env.events()
+        .publish(topics, (admin.clone(), oracle.clone()));
+}
+
+pub fn value_guarantee_triggered(
+    env: &Env,
+    depositor: &Address,
+    token: &Address,
+    shortfall: i128,
+    deposit_id: u32,
+) {
+    let topics = (
+        Symbol::new(env, "val_guarantee"),
+        depositor.clone(),
+        token.clone(),
+    );
+    env.events()
+        .publish(topics, (shortfall, deposit_id));
+}
+
+pub fn protection_fund_updated(
+    env: &Env,
+    new_balance: i128,
+    change_amount: i128,
+    is_addition: bool,
+) {
+    let topics = (Symbol::new(env, "prot_fund_upd"),);
+    env.events()
+        .publish(topics, (new_balance, change_amount, is_addition));
+}
 }
 
 /// Emitted when the withdrawal whitelist is set for a deposit (issue #331).

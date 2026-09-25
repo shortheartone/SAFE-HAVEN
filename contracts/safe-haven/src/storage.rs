@@ -1529,3 +1529,96 @@ pub fn remove_nft_evolution(env: &Env, depositor: &Address, deposit_id: u32) {
     let key = crate::types::VaultKey::NFTEvolution(depositor.clone(), deposit_id);
     env.storage().persistent().remove(&key);
 }
+
+// ----------------------------------------------------------------
+//  Oracle configuration helpers (volatility protection)
+// ----------------------------------------------------------------
+
+/// Store the oracle address for a given token.
+/// Used to fetch price feeds for value guarantees.
+pub fn set_oracle(env: &Env, token: &Address, oracle: &Address) {
+    let key = VaultKey::Oracle(token.clone());
+    env.storage().persistent().set(&key, oracle);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+/// Retrieve the oracle address for a given token.
+/// Returns None if no oracle is configured for this token.
+pub fn get_oracle(env: &Env, token: &Address) -> Option<Address> {
+    let key = VaultKey::Oracle(token.clone());
+    let oracle: Option<Address> = env.storage().persistent().get(&key);
+    if oracle.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    }
+    oracle
+}
+
+/// Remove the oracle configuration for a token.
+pub fn remove_oracle(env: &Env, token: &Address) {
+    let key = VaultKey::Oracle(token.clone());
+    env.storage().persistent().remove(&key);
+}
+
+// ----------------------------------------------------------------
+//  Protection fund helpers (volatility protection)
+// ----------------------------------------------------------------
+
+/// Get the current balance of the volatility protection fund.
+pub fn get_protection_fund_balance(env: &Env) -> i128 {
+    env.storage()
+        .persistent()
+        .get::<VaultKey, i128>(&VaultKey::ProtectionFundBalance)
+        .unwrap_or(0)
+}
+
+/// Add funds to the volatility protection fund.
+/// Called when protection fund contributions are made.
+pub fn add_to_protection_fund(env: &Env, amount: i128) -> Result<(), crate::errors::VaultError> {
+    if amount <= 0 {
+        return Err(crate::errors::VaultError::InvalidAmount);
+    }
+
+    let current = get_protection_fund_balance(env);
+    let new_balance = current
+        .checked_add(amount)
+        .ok_or(crate::errors::VaultError::AmountTooLarge)?;
+
+    env.storage()
+        .persistent()
+        .set(&VaultKey::ProtectionFundBalance, &new_balance);
+    env.storage()
+        .persistent()
+        .extend_ttl(&VaultKey::ProtectionFundBalance, BUMP_THRESHOLD, BUMP_TARGET);
+
+    Ok(())
+}
+
+/// Withdraw funds from the volatility protection fund.
+/// Called when value shortfalls are covered from the protection fund.
+pub fn withdraw_from_protection_fund(
+    env: &Env,
+    amount: i128,
+) -> Result<(), crate::errors::VaultError> {
+    if amount <= 0 {
+        return Err(crate::errors::VaultError::InvalidAmount);
+    }
+
+    let current = get_protection_fund_balance(env);
+    if current < amount {
+        return Err(crate::errors::VaultError::InsufficientProtectionFund);
+    }
+
+    let new_balance = current.saturating_sub(amount);
+    env.storage()
+        .persistent()
+        .set(&VaultKey::ProtectionFundBalance, &new_balance);
+    env.storage()
+        .persistent()
+        .extend_ttl(&VaultKey::ProtectionFundBalance, BUMP_THRESHOLD, BUMP_TARGET);
+
+    Ok(())
+}

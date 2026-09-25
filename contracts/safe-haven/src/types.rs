@@ -69,26 +69,10 @@ pub enum VaultKey {
     /// Persists the schema version written by the last `migrate()` call (or 1
     /// for contracts that were initialized before versioning was introduced).
     StorageVersion,
-    /// Guards flash-loan execution against re-entrant nested calls.
-    FlashLoanGuard,
-    /// Active borrower state for a single-token flash loan.
-    FlashLoanState(Address, Address),
-    /// Fee share owed to a depositor for a token after flash-loan repayment.
-    FlashLoanFeeBalance(Address, Address),
-    /// Staker entry: maps staker address to their stake amount
-    Staker(Address),
-    /// List of all registered stakers
-    StakerList,
-    /// Flag to track if a staker is in the StakerList (prevents duplicates)
-    StakerInList(Address),
-    /// Total amount staked by all stakers
-    TotalStaked,
-    /// Rewards pool for stakers (accumulated from penalties)
-    RewardsPool,
-    /// Rewards claimed by a staker (track cumulative for auditing)
-    StakerRewardsClaimed(Address),
-    /// NFT evolution record: maps (depositor, deposit_id) to NFTEvolutionRecord
-    NFTEvolution(Address, u32),
+    /// Oracle configuration mapping token address to oracle address
+    Oracle(Address),
+    /// Total balance of the volatility protection fund (reserves for value shortfalls)
+    ProtectionFundBalance,
 }
 
 #[contracttype]
@@ -99,26 +83,8 @@ pub struct VaultEntry {
     pub unlock_time: u64,
     pub depositor: Address,
     pub penalty_bps: u32,
-    /// Compound interest accrual frequency in seconds (0 = no compounding). (issue #332)
-    pub compound_frequency_secs: u64,
-    /// Timestamp of last compound accrual (issue #332).
-    pub last_accrual_timestamp: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TaxLossHarvest {
-    pub depositor: Address,
-    pub original_token: Address,
-    pub replacement_token: Address,
-    pub original_deposit_id: u32,
-    pub replacement_deposit_id: u32,
-    pub cost_basis: i128,
-    pub current_value: i128,
-    pub realized_loss: i128,
-    pub tax_benefit: i128,
-    pub harvested_at: u64,
-    pub wash_sale_until: u64,
+    /// Minimum value guarantee in native token units (optional, 0 = disabled)
+    pub min_value_guarantee: i128,
 }
 
 #[contracttype]
@@ -129,6 +95,8 @@ pub struct LedgerVaultEntry {
     pub unlock_ledger: u32,
     pub depositor: Address,
     pub penalty_bps: u32,
+    /// Minimum value guarantee in native token units (optional, 0 = disabled)
+    pub min_value_guarantee: i128,
 }
 
 /// A single token+amount pair used in multi-token deposits (issue #330).
