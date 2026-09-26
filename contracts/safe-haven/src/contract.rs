@@ -3448,24 +3448,117 @@ impl SafeHaven {
             deposit_id,
             sub.executed_count,
         );
-        events::deposit(&env, &depositor, &sub.token, sub.amount, unlock_time, deposit_id);
 
         Ok(deposit_id)
     }
 
-    pub fn pause_subscription(env: Env, depositor: Address, sub_id: u32) -> Result<(), VaultError> {
-        depositor.require_auth();
-        let mut sub = storage::get_subscription(&env, &depositor, sub_id).ok_or(VaultError::NoSubscriptionFound)?;
-        if sub.cancelled { return Err(VaultError::SubscriptionCancelled); }
-        if sub.executed_count >= sub.total_count { return Err(VaultError::SubscriptionCompleted); }
-        if sub.paused { return Err(VaultError::SubscriptionPaused); }
-        sub.paused = true;
-        storage::set_subscription(&env, &depositor, sub_id, &sub);
-        events::subscription_paused(&env, &depositor, sub_id);
-        Ok(())
+    // ================================================================
+    //  Yield Farming Integration (issue #XXX)
+    // ================================================================
+
+    /// Initialize yield farming configuration (admin only).
+    /// Sets up the default farming configuration with approved protocols list.
+    pub fn init_yield_farming(env: Env, admin: Address) -> Result<(), VaultError> {
+        admin.require_auth();
+        yield_farming::initialize_farming_config(&env, &admin)
     }
 
-    pub fn resume_subscription(env: Env, depositor: Address, sub_id: u32) -> Result<(), VaultError> {
+    /// Add an approved farming protocol (admin only).
+    /// Only protocols in this list can receive farming deposits.
+    pub fn add_farming_protocol(
+        env: Env,
+        admin: Address,
+        protocol_address: Address,
+    ) -> Result<(), VaultError> {
+        admin.require_auth();
+        yield_farming::add_farming_protocol(&env, &admin, &protocol_address)
+    }
+
+    /// Enable yield farming for a specific deposit.
+    /// Deploys funds to an approved farming strategy and begins earning rewards.
+    pub fn enable_farming(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+        strategy: u8,
+        protocol_address: Address,
+    ) -> Result<(), VaultError> {
+        depositor.require_auth();
+
+        if storage::is_paused(&env) {
+            return Err(VaultError::ContractPaused);
+        }
+
+        // Convert strategy byte to enum
+        let strategy_enum = match strategy {
+            0 => types::FarmingStrategy::DirectStaking,
+            1 => types::FarmingStrategy::LiquidityProvision,
+            2 => types::FarmingStrategy::LendingYield,
+            _ => return Err(VaultError::InvalidParameter),
+        };
+
+        yield_farming::enable_yield_farming(
+            &env,
+            &depositor,
+            deposit_id,
+            strategy_enum,
+            &protocol_address,
+        )
+    }
+
+    /// Claim farming rewards for a deposit.
+    /// Calculates accrued rewards since last claim and transfers them to depositor.
+    pub fn claim_farming_rewards(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Result<i128, VaultError> {
+        depositor.require_auth();
+
+        if storage::is_paused(&env) {
+            return Err(VaultError::ContractPaused);
+        }
+
+        yield_farming::claim_farming_rewards(&env, &depositor, deposit_id)
+    }
+
+    /// Disable farming for a deposit and withdraw deployed funds.
+    /// Returns tuple of (deployed_amount, total_rewards_retained).
+    pub fn disable_farming(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Result<(i128, i128), VaultError> {
+        depositor.require_auth();
+
+        if storage::is_paused(&env) {
+            return Err(VaultError::ContractPaused);
+        }
+
+        yield_farming::disable_farming(&env, &depositor, deposit_id)
+    }
+
+    /// Get farming information for a deposit.
+    /// Returns tuple of (enabled, deployed_amount, total_rewards).
+    pub fn get_farming_info(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Result<(bool, i128, i128), VaultError> {
+        yield_farming::get_farming_info(&env, &depositor, deposit_id)
+    }
+
+    /// Get global yield farming configuration.
+    pub fn get_farming_config(env: Env) -> Option<types::FarmingConfig> {
+        storage::get_farming_config(&env)
+    }
+
+    /// Get total farming rewards claimed by a depositor (for auditing).
+    pub fn get_total_rewards_claimed(env: Env, depositor: Address) -> i128 {
+        storage::get_total_farming_rewards_claimed(&env, &depositor)
+    }
+
+    pub fn pause_subscription(env: Env, depositor: Address, sub_id: u32) -> Result<(), VaultError> {
         depositor.require_auth();
         let mut sub = storage::get_subscription(&env, &depositor, sub_id).ok_or(VaultError::NoSubscriptionFound)?;
         if sub.cancelled { return Err(VaultError::SubscriptionCancelled); }

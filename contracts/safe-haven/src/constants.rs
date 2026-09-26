@@ -48,3 +48,19 @@ pub const RENEWABLE_ENERGY_BASELINE: u32 = 50;
 
 /// Carbon baseline: grams CO2e per unit per second (1 gram per unit-second)
 pub const CARBON_BASELINE_PER_UNIT_SECOND: i128 = 1;
+
+// ================================================================
+// YIELD FARMING CONSTANTS (issue #XXX)
+// ================================================================
+
+/// Minimum amount required to enable yield farming (prevents dust amounts)
+pub const MIN_FARMING_AMOUNT: i128 = 1_000_000; // 1M base units
+
+/// Maximum proportion of a deposit that can be farmed (in bps; 9000 = 90%)
+pub const MAX_FARMING_PROPORTION_BPS: u32 = 9_000;
+
+/// Risk level for farming strategies: 1-10, where 10 is most conservative
+pub const FARMING_RISK_LEVEL: u8 = 8; // Conservative default
+
+/// Expected annual yield from farming (in bps; 300 = 3%)
+pub const FARMING_EXPECTED_ANNUAL_YIELD_BPS: u128 = 300;
