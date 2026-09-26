@@ -1032,6 +1032,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
+name = "safe-haven"
+version = "0.1.0"
+dependencies = [
+ "arbitrary",
+ "rand",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "schemars"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1510,15 +1519,6 @@ name = "time-core"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
-
-[[package]]
-name = "time-lock-vault"
-version = "0.1.0"
-dependencies = [
- "arbitrary",
- "rand",
- "soroban-sdk",
-]
 
 [[package]]
 name = "time-macros"

@@ -24,5 +24,7 @@ pub use constants::{
 pub use contract::SafeHaven;
 pub use contract::SafeHavenClient;
 
+pub use types::{PrivateBalanceProof, PrivateVaultEntry};
+
 #[cfg(test)]
 mod test;

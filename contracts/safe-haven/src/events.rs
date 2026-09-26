@@ -108,3 +108,32 @@ pub fn withdraw_to(
     let topics = (Symbol::new(env, "withdraw_to"), depositor.clone(), token.clone());
     env.events().publish(topics, (recipient.clone(), amount));
 }
+
+// ----------------------------------------------------------------
+//  Privacy events
+// ----------------------------------------------------------------
+
+use soroban_sdk::Bytes;
+
+/// Emitted when a user opts into privacy mode.
+pub fn privacy_enabled(env: &Env, depositor: &Address) {
+    let topics = (Symbol::new(env, "priv_enabled"), depositor.clone());
+    env.events().publish(topics, ());
+}
+
+/// Emitted when a private deposit is created.
+/// The `commitment` is public (on-chain binding), but token and amount are hidden.
+/// The `deposit_id` is the internal counter value (same namespace as public deposits).
+pub fn private_deposit(env: &Env, depositor: &Address, commitment: &Bytes, unlock_time: u64, deposit_id: u32) {
+    let topics = (Symbol::new(env, "priv_deposit"), depositor.clone());
+    env.events().publish(topics, (commitment.clone(), unlock_time, deposit_id));
+}
+
+/// Emitted when a private withdrawal completes.
+/// The `nullifier` is published so off-chain indexers can confirm spend without
+/// linking it to the original deposit entry.
+pub fn private_withdraw(env: &Env, nullifier: &Bytes, deposit_id: u32) {
+    // Intentionally no depositor address in topics — preserves privacy.
+    let topics = (Symbol::new(env, "priv_withdraw"),);
+    env.events().publish(topics, (nullifier.clone(), deposit_id));
+}

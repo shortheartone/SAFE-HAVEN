@@ -3,13 +3,13 @@
 //  Stellar Blockchain | Soroban SDK v22
 // ============================================================
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, token, xdr::ToXdr, Address, Bytes, Env, Vec};
 
 use crate::{
     constants::{MAX_BATCH_SIZE, MAX_DEPOSIT_AMOUNT, MAX_LOCK_DURATION_SECS, MIN_LOCK_DURATION_SECS},
     errors::VaultError,
     events, storage,
-    types::{VaultEntry, LedgerVaultEntry},
+    types::{LedgerVaultEntry, PrivateBalanceProof, PrivateVaultEntry, VaultEntry},
 };
 
 #[contract]
@@ -652,5 +652,331 @@ impl SafeHaven {
 
     pub fn is_initialized(env: Env) -> bool {
         storage::is_initialized(&env)
+    }
+
+    // ----------------------------------------------------------------
+    //  Privacy: Opt-in
+    // ----------------------------------------------------------------
+
+    /// Permanently enables privacy mode for `depositor`. Once enabled it cannot
+    /// be disabled — future deposits made by this address can use
+    /// `private_deposit()` instead of (or in addition to) `deposit()`.
+    pub fn enable_privacy(env: Env, depositor: Address) -> Result<(), VaultError> {
+        depositor.require_auth();
+        storage::set_privacy_enabled(&env, &depositor);
+        events::privacy_enabled(&env, &depositor);
+        Ok(())
+    }
+
+    /// Returns `true` if `depositor` has opted into privacy mode.
+    pub fn is_privacy_enabled(env: Env, depositor: Address) -> bool {
+        storage::is_privacy_enabled(&env, &depositor)
+    }
+
+    /// Allow or revoke a compliance auditor. The auditor must still receive
+    /// the private preimage from the depositor before an audit can succeed.
+    pub fn set_auditor(
+        env: Env,
+        admin: Address,
+        auditor: Address,
+        enabled: bool,
+    ) -> Result<(), VaultError> {
+        admin.require_auth();
+        storage::require_admin(&env, &admin)?;
+        storage::set_auditor(&env, &auditor, enabled);
+        Ok(())
+    }
+
+    pub fn is_auditor(env: Env, auditor: Address) -> bool {
+        storage::is_auditor(&env, &auditor)
+    }
+
+    // ----------------------------------------------------------------
+    //  Privacy: Private Deposit
+    // ----------------------------------------------------------------
+
+    /// Create a private deposit. The caller must have called `enable_privacy()` first.
+    ///
+    /// # Arguments
+    /// * `depositor`  – The account funding and owning this vault.
+    /// * `token`      – SAC token address.
+    /// * `amount`     – Token amount (transferred from `depositor`).
+    /// * `unlock_time`– Lock expiry (seconds since Unix epoch).
+    /// * `penalty_bps`– Early-exit penalty in basis points (0–10 000).
+    /// * `commitment` – 32-byte SHA-256 of `secret || token_address || amount || salt`.
+    ///                  Computed off-chain by the depositor.
+    ///
+    /// The `commitment` must be exactly 32 bytes. Neither the token address nor
+    /// the amount are stored in the on-chain entry — they are hidden inside the
+    /// commitment. The caller is responsible for keeping the preimage secret.
+    ///
+    /// # Commitment Scheme
+    /// ```text
+    /// commitment = SHA-256(secret[32] || token_bytes[32] || amount_bytes[16] || salt[32])
+    /// nullifier  = SHA-256(secret[32] || deposit_id[4])
+    /// ```
+    pub fn private_deposit(
+        env: Env,
+        depositor: Address,
+        token: Address,
+        amount: i128,
+        unlock_time: u64,
+        penalty_bps: u32,
+        commitment: Bytes,
+    ) -> Result<u32, VaultError> {
+        depositor.require_auth();
+
+        if storage::is_paused(&env) {
+            return Err(VaultError::ContractPaused);
+        }
+
+        if !storage::is_privacy_enabled(&env, &depositor) {
+            return Err(VaultError::PrivacyNotEnabled);
+        }
+
+        // Commitment must be exactly 32 bytes (SHA-256 output).
+        if commitment.len() != 32 {
+            return Err(VaultError::InvalidCommitmentLength);
+        }
+
+        if amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+
+        let max_deposit = storage::get_max_deposit(&env).unwrap_or(MAX_DEPOSIT_AMOUNT);
+        if amount > max_deposit {
+            return Err(VaultError::AmountTooLarge);
+        }
+
+        if penalty_bps > 10_000 {
+            return Err(VaultError::InvalidPenaltyBps);
+        }
+
+        if penalty_bps > 0 && storage::get_fee_recipient(&env).is_none() {
+            return Err(VaultError::MissingFeeRecipient);
+        }
+
+        let now = env.ledger().timestamp();
+        if unlock_time <= now {
+            return Err(VaultError::UnlockTimeNotInFuture);
+        }
+
+        let max_lock = storage::get_max_lock_secs(&env).unwrap_or(MAX_LOCK_DURATION_SECS);
+        let lock_duration: u64 = unlock_time.saturating_sub(now);
+        if lock_duration > max_lock {
+            return Err(VaultError::LockDurationTooLong);
+        }
+        if lock_duration < MIN_LOCK_DURATION_SECS {
+            return Err(VaultError::LockDurationTooShort);
+        }
+
+        let deposit_id = storage::next_deposit_id(&env, &depositor);
+
+        // Transfer tokens first — checks-effects-interactions:
+        // we store state before the transfer below.
+        let entry = PrivateVaultEntry {
+            commitment: commitment.clone(),
+            unlock_time,
+            penalty_bps,
+        };
+
+        // Effects: store before external call.
+        storage::set_private_deposit(&env, &depositor, deposit_id, &entry);
+        storage::add_depositor(&env, &depositor);
+
+        // Interaction: token transfer.
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&depositor, &env.current_contract_address(), &amount);
+
+        events::private_deposit(&env, &depositor, &commitment, unlock_time, deposit_id);
+
+        Ok(deposit_id)
+    }
+
+    // ----------------------------------------------------------------
+    //  Privacy: Private Withdrawal
+    // ----------------------------------------------------------------
+
+    /// Withdraw a private deposit by revealing the commitment preimage.
+    ///
+    /// The caller proves ownership of the locked funds by supplying:
+    /// * `secret`  – 32-byte random secret chosen at deposit time.
+    /// * `token`   – The token address that was deposited.
+    /// * `amount`  – The amount that was deposited.
+    /// * `salt`    – 32-byte random salt chosen at deposit time.
+    ///
+    /// The contract re-derives:
+    /// * `commitment = SHA-256(secret || token || amount || salt)` — compared with stored value.
+    /// * `nullifier  = SHA-256(secret || deposit_id)`              — checked for double-spend.
+    ///
+    /// If both checks pass the funds are returned to `depositor`.
+    pub fn private_withdraw(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+        secret: Bytes,
+        token: Address,
+        amount: i128,
+        salt: Bytes,
+    ) -> Result<(), VaultError> {
+        depositor.require_auth();
+
+        let entry = storage::get_private_deposit(&env, &depositor, deposit_id)
+            .ok_or(VaultError::NoDepositFound)?;
+
+        let now = env.ledger().timestamp();
+        if now < entry.unlock_time {
+            return Err(VaultError::FundsStillLocked);
+        }
+
+        // ---- Verify commitment ----
+        let expected_commitment = Self::compute_commitment(&env, &secret, &token, amount, &salt);
+        if expected_commitment != entry.commitment {
+            return Err(VaultError::InvalidCommitment);
+        }
+
+        // ---- Verify & spend nullifier ----
+        let nullifier = Self::compute_nullifier(&env, &secret, deposit_id);
+        if storage::is_nullifier_used(&env, &nullifier) {
+            return Err(VaultError::NullifierAlreadyUsed);
+        }
+
+        // Effects: clear state before external call.
+        storage::remove_private_deposit(&env, &depositor, deposit_id);
+        storage::spend_nullifier(&env, &nullifier);
+        if storage::get_deposit_ids(&env, &depositor).len() == 0 {
+            storage::remove_depositor(&env, &depositor);
+        }
+
+        // Interaction: transfer tokens.
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&env.current_contract_address(), &depositor, &amount);
+
+        events::private_withdraw(&env, &nullifier, deposit_id);
+
+        Ok(())
+    }
+
+    // ----------------------------------------------------------------
+    //  Privacy: Audit
+    // ----------------------------------------------------------------
+
+    /// Read-only audit query. Returns `true` if the supplied preimage matches
+    /// the stored commitment for `(depositor, deposit_id)`.
+    ///
+    /// Only an auditor explicitly authorized by the admin can call this. The
+    /// depositor must separately disclose the preimage to that auditor.
+    pub fn audit_private_deposit(
+        env: Env,
+        auditor: Address,
+        depositor: Address,
+        deposit_id: u32,
+        secret: Bytes,
+        token: Address,
+        amount: i128,
+        salt: Bytes,
+    ) -> Result<bool, VaultError> {
+        auditor.require_auth();
+        if !storage::is_auditor(&env, &auditor) {
+            return Err(VaultError::AuditorUnauthorized);
+        }
+        let entry = match storage::get_private_deposit(&env, &depositor, deposit_id) {
+            Some(e) => e,
+            None => return Ok(false),
+        };
+        let expected = Self::compute_commitment(&env, &secret, &token, amount, &salt);
+        Ok(expected == entry.commitment)
+    }
+
+    /// Return a private deposit amount only after verifying its commitment.
+    /// The depositor's authorization prevents an arbitrary public query from
+    /// turning a valid preimage into a balance disclosure.
+    pub fn private_balance(
+        env: Env,
+        depositor: Address,
+        proof: PrivateBalanceProof,
+    ) -> Result<i128, VaultError> {
+        depositor.require_auth();
+        Self::verify_private_proof(&env, &depositor, &proof)?;
+        Ok(proof.amount)
+    }
+
+    /// Returns the `PrivateVaultEntry` for a private deposit, or `None` if not found.
+    /// The entry only contains the commitment, unlock_time, and penalty_bps — the
+    /// amount and token address are NOT exposed.
+    pub fn get_private_vault(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Option<PrivateVaultEntry> {
+        storage::get_private_deposit(&env, &depositor, deposit_id)
+    }
+
+    /// Returns `true` if a nullifier has already been spent.
+    /// Useful for off-chain indexers to confirm withdrawal finality.
+    pub fn is_nullifier_spent(env: Env, nullifier: Bytes) -> bool {
+        storage::is_nullifier_used(&env, &nullifier)
+    }
+
+    // ----------------------------------------------------------------
+    //  Privacy: Commitment helpers (private — used internally)
+    // ----------------------------------------------------------------
+
+    /// Compute `SHA-256(secret[32] || token_bytes[32] || amount_bytes[16] || salt[32])`.
+    ///
+    /// The token Address is serialized via its raw 32-byte Stellar key. The amount
+    /// is serialized as a 16-byte big-endian i128.
+    fn compute_commitment(env: &Env, secret: &Bytes, token: &Address, amount: i128, salt: &Bytes) -> Bytes {
+        let mut preimage = Bytes::new(env);
+        preimage.append(secret);
+        // Encode token as 32 bytes via Soroban's XDR-compatible bytes representation.
+        let token_bytes = token.to_xdr(env);
+        preimage.append(&token_bytes);
+        // Encode amount as 16-byte big-endian.
+        let amount_bytes = Self::i128_to_bytes(env, amount);
+        preimage.append(&amount_bytes);
+        preimage.append(salt);
+        env.crypto().sha256(&preimage).into()
+    }
+
+    /// Compute `SHA-256(secret[32] || deposit_id[4])`.
+    fn compute_nullifier(env: &Env, secret: &Bytes, deposit_id: u32) -> Bytes {
+        let mut preimage = Bytes::new(env);
+        preimage.append(secret);
+        let id_bytes = Self::u32_to_bytes(env, deposit_id);
+        preimage.append(&id_bytes);
+        env.crypto().sha256(&preimage).into()
+    }
+
+    fn verify_private_proof(
+        env: &Env,
+        depositor: &Address,
+        proof: &PrivateBalanceProof,
+    ) -> Result<(), VaultError> {
+        let entry = storage::get_private_deposit(env, depositor, proof.deposit_id)
+            .ok_or(VaultError::NoDepositFound)?;
+        let expected = Self::compute_commitment(
+            env,
+            &proof.secret,
+            &proof.token,
+            proof.amount,
+            &proof.salt,
+        );
+        if expected != entry.commitment {
+            return Err(VaultError::InvalidCommitment);
+        }
+        Ok(())
+    }
+
+    /// Serialize `i128` as 16 big-endian bytes.
+    fn i128_to_bytes(env: &Env, v: i128) -> Bytes {
+        let raw = v.to_be_bytes();
+        Bytes::from_array(env, &raw)
+    }
+
+    /// Serialize `u32` as 4 big-endian bytes.
+    fn u32_to_bytes(env: &Env, v: u32) -> Bytes {
+        let raw = v.to_be_bytes();
+        Bytes::from_array(env, &raw)
     }
 }

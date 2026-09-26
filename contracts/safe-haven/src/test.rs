@@ -5,13 +5,13 @@ extern crate std;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger, LedgerInfo},
     token::{Client as TokenClient, StellarAssetClient},
-    Address, Env,
+    xdr::ToXdr, Address, Bytes, Env,
 };
 
 use crate::{
     contract::{SafeHaven, SafeHavenClient},
     errors::VaultError,
-    types::{VaultEntry, VaultKey, MAX_DEPOSIT_AMOUNT, MAX_LOCK_DURATION_SECS},
+    types::{PrivateBalanceProof, VaultEntry, VaultKey, MAX_DEPOSIT_AMOUNT, MAX_LOCK_DURATION_SECS},
 };
 
 fn setup() -> (
@@ -53,6 +53,21 @@ fn advance_time(env: &Env, seconds: u64) {
         min_persistent_entry_ttl: 4096,
         max_entry_ttl: 33_000_000,
     });
+}
+
+fn private_commitment(
+    env: &Env,
+    secret: &Bytes,
+    token: &Address,
+    amount: i128,
+    salt: &Bytes,
+) -> Bytes {
+    let mut preimage = Bytes::new(env);
+    preimage.append(secret);
+    preimage.append(&token.to_xdr(env));
+    preimage.append(&Bytes::from_array(env, &amount.to_be_bytes()));
+    preimage.append(salt);
+    env.crypto().sha256(&preimage).into()
 }
 
 // ================================================================
@@ -127,6 +142,94 @@ fn test_deposit_transfers_tokens_to_contract() {
     let unlock_time = env.ledger().timestamp() + 3600;
     vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
     assert_eq!(token_client.balance(&alice), 9_000);
+}
+
+// ================================================================
+//  Privacy
+// ================================================================
+
+#[test]
+fn test_private_deposit_requires_opt_in_and_hides_amount_in_entry() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let secret = Bytes::from_array(&env, &[1; 32]);
+    let salt = Bytes::from_array(&env, &[2; 32]);
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let commitment = private_commitment(&env, &secret, &token, 1_000, &salt);
+
+    assert_eq!(
+        vault.try_private_deposit(&alice, &token, &1_000, &unlock_time, &0, &commitment),
+        Err(Ok(VaultError::PrivacyNotEnabled))
+    );
+
+    vault.enable_privacy(&alice);
+    let id = vault.private_deposit(&alice, &token, &1_000, &unlock_time, &0, &commitment);
+    let entry = vault.get_private_vault(&alice, &id).unwrap();
+    assert_eq!(entry.commitment, commitment);
+    assert_eq!(vault.get_private_vault(&alice, &id).unwrap().unlock_time, unlock_time);
+}
+
+#[test]
+fn test_private_balance_requires_valid_proof() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let secret = Bytes::from_array(&env, &[3; 32]);
+    let salt = Bytes::from_array(&env, &[4; 32]);
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let commitment = private_commitment(&env, &secret, &token, 1_000, &salt);
+    vault.enable_privacy(&alice);
+    let id = vault.private_deposit(&alice, &token, &1_000, &unlock_time, &0, &commitment);
+
+    let proof = PrivateBalanceProof {
+        deposit_id: id,
+        secret: secret.clone(),
+        token: token.clone(),
+        amount: 1_000,
+        salt: salt.clone(),
+    };
+    assert_eq!(vault.private_balance(&alice, &proof), Ok(1_000));
+
+    let invalid = PrivateBalanceProof { amount: 999, ..proof };
+    assert_eq!(
+        vault.try_private_balance(&alice, &invalid),
+        Err(Ok(VaultError::InvalidCommitment))
+    );
+}
+
+#[test]
+fn test_private_audit_requires_authorized_auditor() {
+    let (env, vault, token, admin, alice, _fee) = setup();
+    let auditor = Address::generate(&env);
+    let secret = Bytes::from_array(&env, &[5; 32]);
+    let salt = Bytes::from_array(&env, &[6; 32]);
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let commitment = private_commitment(&env, &secret, &token, 1_000, &salt);
+    vault.enable_privacy(&alice);
+    let id = vault.private_deposit(&alice, &token, &1_000, &unlock_time, &0, &commitment);
+
+    assert_eq!(
+        vault.try_audit_private_deposit(&auditor, &alice, &id, &secret, &token, &1_000, &salt),
+        Err(Ok(VaultError::AuditorUnauthorized))
+    );
+    vault.set_auditor(&admin, &auditor, &true);
+    assert!(vault.audit_private_deposit(&auditor, &alice, &id, &secret, &token, &1_000, &salt));
+}
+
+#[test]
+fn test_private_withdraw_requires_preimage_and_clears_entry() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let secret = Bytes::from_array(&env, &[7; 32]);
+    let salt = Bytes::from_array(&env, &[8; 32]);
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let commitment = private_commitment(&env, &secret, &token, 1_000, &salt);
+    vault.enable_privacy(&alice);
+    let id = vault.private_deposit(&alice, &token, &1_000, &unlock_time, &0, &commitment);
+    advance_time(&env, 3601);
+
+    vault.private_withdraw(&alice, &id, &secret, &token, &1_000, &salt);
+    assert!(vault.get_private_vault(&alice, &id).is_none());
+    assert_eq!(
+        vault.try_private_withdraw(&alice, &id, &secret, &token, &1_000, &salt),
+        Err(Ok(VaultError::NoDepositFound))
+    );
 }
 
 // ================================================================

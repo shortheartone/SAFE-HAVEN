@@ -338,3 +338,100 @@ pub fn require_admin(env: &Env, caller: &Address) -> Result<(), crate::errors::V
         _ => Err(crate::errors::VaultError::Unauthorized),
     }
 }
+
+// ----------------------------------------------------------------
+//  Privacy storage helpers
+// ----------------------------------------------------------------
+
+use crate::types::PrivateVaultEntry;
+
+/// Enable privacy mode for `depositor`.
+pub fn set_privacy_enabled(env: &Env, depositor: &Address) {
+    let key = VaultKey::PrivacyEnabled(depositor.clone());
+    env.storage().persistent().set(&key, &true);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+/// Returns `true` if `depositor` has opted in to privacy mode.
+pub fn is_privacy_enabled(env: &Env, depositor: &Address) -> bool {
+    let key = VaultKey::PrivacyEnabled(depositor.clone());
+    env.storage()
+        .persistent()
+        .get::<VaultKey, bool>(&key)
+        .unwrap_or(false)
+}
+
+/// Store a `PrivateVaultEntry`. Uses the same deposit-ID counter as public deposits.
+pub fn set_private_deposit(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    entry: &PrivateVaultEntry,
+) {
+    let key = VaultKey::PrivateDeposit(depositor.clone(), deposit_id);
+    env.storage().persistent().set(&key, entry);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    // Register in the active-ID list so `get_deposit_ids` includes private deposits.
+    add_active_deposit_id(env, depositor, deposit_id);
+}
+
+/// Read a `PrivateVaultEntry` without bumping TTL (for read-only queries).
+pub fn get_private_deposit(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+) -> Option<PrivateVaultEntry> {
+    let key = VaultKey::PrivateDeposit(depositor.clone(), deposit_id);
+    let entry: Option<PrivateVaultEntry> = env.storage().persistent().get(&key);
+    if entry.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    }
+    entry
+}
+
+/// Remove a `PrivateVaultEntry` (called after a successful withdrawal).
+pub fn remove_private_deposit(env: &Env, depositor: &Address, deposit_id: u32) {
+    let key = VaultKey::PrivateDeposit(depositor.clone(), deposit_id);
+    env.storage().persistent().remove(&key);
+    remove_active_deposit_id(env, depositor, deposit_id);
+}
+
+/// Returns `true` if this nullifier has been spent.
+pub fn is_nullifier_used(env: &Env, nullifier: &soroban_sdk::Bytes) -> bool {
+    let key = VaultKey::Nullifier(nullifier.clone());
+    env.storage()
+        .persistent()
+        .get::<VaultKey, bool>(&key)
+        .unwrap_or(false)
+}
+
+/// Mark a nullifier as spent so it cannot be reused.
+pub fn spend_nullifier(env: &Env, nullifier: &soroban_sdk::Bytes) {
+    let key = VaultKey::Nullifier(nullifier.clone());
+    env.storage().persistent().set(&key, &true);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+pub fn set_auditor(env: &Env, auditor: &Address, enabled: bool) {
+    let key = VaultKey::Auditor(auditor.clone());
+    env.storage().persistent().set(&key, &enabled);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+pub fn is_auditor(env: &Env, auditor: &Address) -> bool {
+    let key = VaultKey::Auditor(auditor.clone());
+    env.storage()
+        .persistent()
+        .get::<VaultKey, bool>(&key)
+        .unwrap_or(false)
+}
