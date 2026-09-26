@@ -14,7 +14,7 @@ use crate::{
     events, storage,
     types::{
         DepositType, MultiTokenVaultEntry, TokenDeposit, VaultEntry, LedgerVaultEntry, Page,
-        STORAGE_VERSION, MAX_TOKENS_PER_DEPOSIT,
+        STORAGE_VERSION, MAX_TOKENS_PER_DEPOSIT, AutoRenewalConfig,
     },
 };
 
@@ -103,6 +103,71 @@ fn check_whitelist(
         return Err(VaultError::RecipientNotWhitelisted);
     }
     Ok(())
+}
+
+/// Helper: Check if a deposit should auto-renew and renew it if configured.
+/// 
+/// Returns `Ok(Some(deposit_id))` if the deposit was renewed (new deposit_id for renewed entry).
+/// Returns `Ok(None)` if the deposit was not renewed.
+/// Returns `Err(VaultError)` if an error occurred.
+///
+/// This helper is called when a deposit reaches its unlock time. If auto-renewal
+/// is configured, it:
+/// 1. Removes the old deposit entry
+/// 2. Creates a new deposit with renewed unlock time
+/// 3. Updates the auto-renewal config with incremented renewal_count
+/// 4. Emits DepositAutoRenewed event
+fn try_auto_renew(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    old_entry: &VaultEntry,
+) -> Result<Option<u32>, VaultError> {
+    // Check if auto-renewal is configured for this deposit
+    if let Some(mut renewal_config) = storage::get_auto_renewal_config(env, depositor, deposit_id) {
+        if !renewal_config.enabled {
+            return Ok(None);
+        }
+
+        // Calculate new unlock time
+        let old_unlock_time = old_entry.unlock_time;
+        let new_unlock_time = old_unlock_time.saturating_add(renewal_config.renewal_duration_secs);
+
+        // Get new deposit ID
+        let new_deposit_id = storage::next_deposit_id(env, depositor);
+
+        // Create new deposit entry with renewed unlock time
+        let new_entry = VaultEntry {
+            token: old_entry.token.clone(),
+            amount: old_entry.amount,
+            unlock_time: new_unlock_time,
+            depositor: depositor.clone(),
+            penalty_bps: old_entry.penalty_bps,
+            compound_frequency_secs: old_entry.compound_frequency_secs,
+            last_accrual_timestamp: env.ledger().timestamp(),
+        };
+
+        // Update renewal config with incremented count
+        renewal_config.renewal_count = renewal_config.renewal_count.saturating_add(1);
+
+        // Store new deposit and update renewal config
+        storage::set_deposit(env, depositor, new_deposit_id, &new_entry);
+        storage::set_auto_renewal_config(env, depositor, new_deposit_id, &renewal_config);
+
+        // Emit renewal event
+        events::deposit_auto_renewed(
+            env,
+            depositor,
+            new_deposit_id,
+            old_unlock_time,
+            new_unlock_time,
+            renewal_config.renewal_count,
+        );
+
+        return Ok(Some(new_deposit_id));
+    }
+
+    Ok(None)
 }
 
 #[contractimpl]
@@ -1033,8 +1098,16 @@ impl SafeHaven {
                 );
             }
 
+            // Check if auto-renewal is configured
+            if let Ok(Some(_renewed_id)) = try_auto_renew(&env, &depositor, deposit_id, &entry) {
+                // Auto-renewal succeeded — deposit has been renewed, return early without withdrawing
+                storage::remove_auto_renewal_config(&env, &depositor, deposit_id);
+                return Ok(());
+            }
+
             storage::remove_deposit(&env, &depositor, deposit_id);
             storage::remove_withdrawal_whitelist(&env, &depositor, deposit_id);
+            storage::remove_auto_renewal_config(&env, &depositor, deposit_id);
             if storage::get_deposit_ids(&env, &depositor).len() == 0 {
                 storage::remove_depositor(&env, &depositor);
             }
@@ -1058,6 +1131,8 @@ impl SafeHaven {
                 return Err(VaultError::FundsStillLocked);
             }
 
+            // For ledger-based deposits, we don't support auto-renewal (not in scope)
+            // Just remove and withdraw
             storage::remove_deposit_by_ledger(&env, &depositor, deposit_id);
             storage::remove_withdrawal_whitelist(&env, &depositor, deposit_id);
             if storage::get_deposit_ids(&env, &depositor).len() == 0 {
@@ -1083,6 +1158,8 @@ impl SafeHaven {
                 return Err(VaultError::FundsStillLocked);
             }
 
+            // For multi-token deposits, we don't support auto-renewal (not in scope)
+            // Just remove and withdraw
             storage::remove_multi_deposit(&env, &depositor, deposit_id);
             storage::remove_withdrawal_whitelist(&env, &depositor, deposit_id);
             if storage::get_deposit_ids(&env, &depositor).len() == 0 {
@@ -1998,6 +2075,118 @@ impl SafeHaven {
     /// cancelled and completed ones — filter by `cancelled` / `executed_count`).
     pub fn get_subscription_ids(env: Env, depositor: Address) -> Vec<u32> {
         storage::get_subscription_ids(&env, &depositor)
+    }
+
+    // ----------------------------------------------------------------
+    //  Auto-renewal subscription functions
+    // ----------------------------------------------------------------
+
+    /// Enable auto-renewal for a deposit.
+    /// 
+    /// When the deposit unlocks, it will automatically be extended by the
+    /// specified `renewal_duration_secs`. The depositor must have an existing
+    /// deposit and must authorize this call.
+    ///
+    /// # Parameters
+    /// - `depositor` — the deposit owner (must sign)
+    /// - `deposit_id` — the ID of the deposit to enable auto-renewal for
+    /// - `renewal_duration_secs` — duration to extend the lock when renewal triggers
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// - `NoDepositFound` — no deposit exists for the given (depositor, deposit_id)
+    /// - `LockDurationTooShort` — renewal_duration_secs < MIN_LOCK_DURATION_SECS
+    /// - `LockDurationTooLong` — renewal_duration_secs > max_lock_secs
+    pub fn enable_auto_renewal(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+        renewal_duration_secs: u64,
+    ) -> Result<(), VaultError> {
+        depositor.require_auth();
+
+        // Validate renewal duration
+        if renewal_duration_secs < MIN_LOCK_DURATION_SECS {
+            return Err(VaultError::LockDurationTooShort);
+        }
+        let max_lock = storage::get_max_lock_secs(&env).unwrap_or(MAX_LOCK_DURATION_SECS);
+        if renewal_duration_secs > max_lock {
+            return Err(VaultError::LockDurationTooLong);
+        }
+
+        // Check that the deposit exists (try all variants)
+        let deposit_exists = 
+            storage::get_deposit_readonly(&env, &depositor, deposit_id).is_some() ||
+            storage::get_deposit_by_ledger_readonly(&env, &depositor, deposit_id).is_some() ||
+            storage::get_multi_deposit_readonly(&env, &depositor, deposit_id).is_some();
+
+        if !deposit_exists {
+            return Err(VaultError::NoDepositFound);
+        }
+
+        // Create or update the auto-renewal config
+        let config = AutoRenewalConfig {
+            enabled: true,
+            renewal_duration_secs,
+            renewal_count: 0,
+        };
+
+        storage::set_auto_renewal_config(&env, &depositor, deposit_id, &config);
+        events::auto_renewal_enabled(&env, &depositor, deposit_id, renewal_duration_secs);
+
+        Ok(())
+    }
+
+    /// Disable auto-renewal for a deposit.
+    /// 
+    /// Cancels the auto-renewal subscription for the given deposit.
+    /// The depositor must authorize this call.
+    ///
+    /// # Parameters
+    /// - `depositor` — the deposit owner (must sign)
+    /// - `deposit_id` — the ID of the deposit to disable auto-renewal for
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// - `NoDepositFound` — no auto-renewal config exists for the given (depositor, deposit_id)
+    pub fn disable_auto_renewal(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Result<(), VaultError> {
+        depositor.require_auth();
+
+        // Check that an auto-renewal config exists
+        if storage::get_auto_renewal_config_readonly(&env, &depositor, deposit_id).is_none() {
+            return Err(VaultError::NoDepositFound);
+        }
+
+        storage::remove_auto_renewal_config(&env, &depositor, deposit_id);
+        events::auto_renewal_disabled(&env, &depositor, deposit_id);
+
+        Ok(())
+    }
+
+    /// Query the auto-renewal configuration for a deposit.
+    /// 
+    /// Returns the auto-renewal configuration if one is set, or `None` otherwise.
+    ///
+    /// # Parameters
+    /// - `depositor` — the deposit owner
+    /// - `deposit_id` — the ID of the deposit
+    ///
+    /// # Returns
+    /// The `AutoRenewalConfig` if configured, or `None`.
+    pub fn get_auto_renewal_config(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Option<AutoRenewalConfig> {
+        storage::get_auto_renewal_config_readonly(&env, &depositor, deposit_id)
     }
 
     // ----------------------------------------------------------------

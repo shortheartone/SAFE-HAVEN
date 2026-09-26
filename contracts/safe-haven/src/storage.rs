@@ -1,6 +1,6 @@
 use soroban_sdk::{Address, Env, Vec};
 
-use crate::types::{MultiTokenVaultEntry, VaultEntry, VaultKey, LedgerVaultEntry, MAX_LOCK_DURATION_SECS};
+use crate::types::{MultiTokenVaultEntry, VaultEntry, VaultKey, LedgerVaultEntry, MAX_LOCK_DURATION_SECS, AutoRenewalConfig};
 
 // ================================================================
 // LEDGER_SECONDS: Average time between Stellar ledger closes
@@ -902,4 +902,57 @@ pub fn remove_upgrade(env: &Env) {
     env.storage()
         .persistent()
         .remove(&VaultKey::PendingUpgrade);
+}
+
+
+// ----------------------------------------------------------------
+//  Auto-renewal configuration helpers
+// ----------------------------------------------------------------
+
+/// Set or update the auto-renewal configuration for a deposit.
+pub fn set_auto_renewal_config(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    config: &AutoRenewalConfig,
+) {
+    let key = VaultKey::AutoRenewalConfig(depositor.clone(), deposit_id);
+    env.storage().persistent().set(&key, config);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+/// Get the auto-renewal configuration for a deposit (mutable path — extends TTL).
+pub fn get_auto_renewal_config(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+) -> Option<AutoRenewalConfig> {
+    let key = VaultKey::AutoRenewalConfig(depositor.clone(), deposit_id);
+    let config: Option<AutoRenewalConfig> = env.storage().persistent().get(&key);
+    if config.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    }
+    config
+}
+
+/// Get the auto-renewal configuration for a deposit (read-only — does not extend TTL).
+pub fn get_auto_renewal_config_readonly(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+) -> Option<AutoRenewalConfig> {
+    let key = VaultKey::AutoRenewalConfig(depositor.clone(), deposit_id);
+    env.storage().persistent().get(&key)
+}
+
+/// Remove the auto-renewal configuration for a deposit.
+pub fn remove_auto_renewal_config(env: &Env, depositor: &Address, deposit_id: u32) {
+    let key = VaultKey::AutoRenewalConfig(depositor.clone(), deposit_id);
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().remove(&key);
+    }
 }

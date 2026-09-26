@@ -177,3 +177,36 @@ pub fn interest_accrued(
     env.events()
         .publish(topics, (deposit_id, old_amount, new_amount));
 }
+
+
+/// Emitted when auto-renewal is enabled for a deposit.
+pub fn auto_renewal_enabled(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    renewal_duration_secs: u64,
+) {
+    let topics = (Symbol::new(env, "auto_rnw_en"), depositor.clone());
+    env.events()
+        .publish(topics, (deposit_id, renewal_duration_secs));
+}
+
+/// Emitted when auto-renewal is disabled for a deposit.
+pub fn auto_renewal_disabled(env: &Env, depositor: &Address, deposit_id: u32) {
+    let topics = (Symbol::new(env, "auto_rnw_dis"), depositor.clone());
+    env.events().publish(topics, deposit_id);
+}
+
+/// Emitted when a deposit is automatically renewed.
+pub fn deposit_auto_renewed(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    old_unlock_time: u64,
+    new_unlock_time: u64,
+    renewal_count: u32,
+) {
+    let topics = (Symbol::new(env, "auto_rnw"), depositor.clone());
+    env.events()
+        .publish(topics, (deposit_id, old_unlock_time, new_unlock_time, renewal_count));
+}

@@ -4761,3 +4761,253 @@ fn test_emergency_withdrawal_mixed_deposit_types_same_ledger() {
     let total = vault.get_emergency_withdrawal_total(&env, env.ledger().sequence());
     assert_eq!(total, 50_000);
 }
+
+
+// ================================================================
+//  Auto-renewal subscription
+// ================================================================
+
+#[test]
+fn test_enable_auto_renewal_success() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+
+    let renewal_duration = 7200; // 2 hours
+    let result = vault.try_enable_auto_renewal(&alice, deposit_id, &renewal_duration);
+    assert_eq!(result, Ok(()));
+
+    // Verify config was stored
+    let config = vault.get_auto_renewal_config(&alice, deposit_id);
+    assert!(config.is_some());
+    let cfg = config.unwrap();
+    assert!(cfg.enabled);
+    assert_eq!(cfg.renewal_duration_secs, renewal_duration);
+    assert_eq!(cfg.renewal_count, 0);
+}
+
+#[test]
+fn test_enable_auto_renewal_validates_renewal_duration_too_short() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+
+    // Try to enable with duration < MIN_LOCK_DURATION_SECS (60)
+    let result = vault.try_enable_auto_renewal(&alice, deposit_id, &30);
+    assert_eq!(result, Err(Ok(VaultError::LockDurationTooShort)));
+}
+
+#[test]
+fn test_enable_auto_renewal_validates_renewal_duration_too_long() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+
+    // Try to enable with duration > MAX_LOCK_DURATION_SECS
+    let result = vault.try_enable_auto_renewal(&alice, deposit_id, &(MAX_LOCK_DURATION_SECS + 1));
+    assert_eq!(result, Err(Ok(VaultError::LockDurationTooLong)));
+}
+
+#[test]
+fn test_enable_auto_renewal_nonexistent_deposit_fails() {
+    let (_env, vault, _token, _admin, alice, _fee) = setup();
+    
+    // Try to enable auto-renewal on deposit that doesn't exist
+    let result = vault.try_enable_auto_renewal(&alice, 999, &3600);
+    assert_eq!(result, Err(Ok(VaultError::NoDepositFound)));
+}
+
+#[test]
+fn test_disable_auto_renewal_success() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+
+    vault.enable_auto_renewal(&alice, deposit_id, &3600);
+    assert!(vault.get_auto_renewal_config(&alice, deposit_id).is_some());
+
+    // Disable it
+    let result = vault.try_disable_auto_renewal(&alice, deposit_id);
+    assert_eq!(result, Ok(()));
+    assert!(vault.get_auto_renewal_config(&alice, deposit_id).is_none());
+}
+
+#[test]
+fn test_disable_auto_renewal_no_config_fails() {
+    let (_env, vault, _token, _admin, alice, _fee) = setup();
+    
+    // Try to disable auto-renewal that was never enabled
+    let result = vault.try_disable_auto_renewal(&alice, 999);
+    assert_eq!(result, Err(Ok(VaultError::NoDepositFound)));
+}
+
+#[test]
+fn test_auto_renewal_triggers_on_withdraw() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+
+    let renewal_duration = 7200; // 2 hours
+    vault.enable_auto_renewal(&alice, deposit_id, &renewal_duration);
+
+    // Advance time to unlock
+    advance_time(&env, 3601);
+
+    // Attempt to withdraw — should trigger auto-renewal instead
+    vault.withdraw(&alice, &deposit_id);
+
+    // Original deposit should be gone
+    assert!(vault.get_vault(&alice, &deposit_id).is_none());
+
+    // But a new deposit should exist with ID deposit_id + 1
+    let new_deposit_id = deposit_id + 1;
+    let new_entry = vault.get_vault(&alice, &new_deposit_id);
+    assert!(new_entry.is_some());
+    let entry = new_entry.unwrap();
+    assert_eq!(entry.amount, 1_000);
+    
+    // Verify the unlock time was extended
+    let expected_new_unlock = unlock_time + renewal_duration;
+    assert_eq!(entry.unlock_time, expected_new_unlock);
+
+    // Verify renewal config was updated with incremented count
+    let new_config = vault.get_auto_renewal_config(&alice, &new_deposit_id);
+    assert!(new_config.is_some());
+    let cfg = new_config.unwrap();
+    assert_eq!(cfg.renewal_count, 1);
+}
+
+#[test]
+fn test_auto_renewal_does_not_trigger_if_disabled() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+
+    vault.enable_auto_renewal(&alice, deposit_id, &7200);
+    vault.disable_auto_renewal(&alice, deposit_id);
+
+    // Advance time to unlock
+    advance_time(&env, 3601);
+
+    // Withdraw should now complete normally
+    vault.withdraw(&alice, &deposit_id);
+
+    // Original deposit should be gone
+    assert!(vault.get_vault(&alice, &deposit_id).is_none());
+
+    // No new deposit should have been created
+    let new_deposit_id = deposit_id + 1;
+    assert!(vault.get_vault(&alice, &new_deposit_id).is_none());
+}
+
+#[test]
+fn test_auto_renewal_track_renewal_count() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let mut deposit_id = vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+
+    let renewal_duration = 3600;
+    vault.enable_auto_renewal(&alice, deposit_id, &renewal_duration);
+
+    // First renewal
+    advance_time(&env, 3601);
+    vault.withdraw(&alice, &deposit_id);
+    let mut new_id = deposit_id + 1;
+    let mut config = vault.get_auto_renewal_config(&alice, &new_id).unwrap();
+    assert_eq!(config.renewal_count, 1);
+
+    // Re-enable auto-renewal for the new deposit
+    vault.enable_auto_renewal(&alice, new_id, &renewal_duration);
+
+    // Second renewal
+    advance_time(&env, 3601);
+    vault.withdraw(&alice, &new_id);
+    deposit_id = new_id;
+    new_id = deposit_id + 1;
+    config = vault.get_auto_renewal_config(&alice, &new_id).unwrap();
+    assert_eq!(config.renewal_count, 2);
+}
+
+#[test]
+fn test_auto_renewal_preserves_deposit_properties() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let penalty_bps = 500; // 5%
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock_time, &penalty_bps);
+
+    let renewal_duration = 7200;
+    vault.enable_auto_renewal(&alice, deposit_id, &renewal_duration);
+
+    // Trigger renewal
+    advance_time(&env, 3601);
+    vault.withdraw(&alice, &deposit_id);
+
+    let new_entry = vault.get_vault(&alice, &(deposit_id + 1)).unwrap();
+    
+    // Verify properties were preserved
+    assert_eq!(new_entry.amount, 1_000);
+    assert_eq!(new_entry.token, token);
+    assert_eq!(new_entry.penalty_bps, penalty_bps);
+    assert_eq!(new_entry.depositor, alice);
+}
+
+#[test]
+fn test_auto_renewal_config_cleanup_on_no_renewal() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+
+    vault.enable_auto_renewal(&alice, deposit_id, &7200);
+
+    // Disable auto-renewal before withdrawal
+    vault.disable_auto_renewal(&alice, deposit_id);
+
+    // Withdraw normally
+    advance_time(&env, 3601);
+    vault.withdraw(&alice, &deposit_id);
+
+    // Config should be cleaned up
+    assert!(vault.get_auto_renewal_config(&alice, &deposit_id).is_none());
+}
+
+#[test]
+fn test_enable_auto_renewal_requires_auth() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    env.mock_all_auths_allowing_non_root_invoke();
+
+    let bob: Address = Address::generate(&env);
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+
+    // Bob (not depositor) tries to enable auto-renewal
+    let result = vault.try_enable_auto_renewal(&bob, deposit_id, &3600);
+    // Should fail auth check
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_disable_auto_renewal_requires_auth() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    env.mock_all_auths_allowing_non_root_invoke();
+
+    let bob: Address = Address::generate(&env);
+    let unlock_time = env.ledger().timestamp() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+
+    vault.enable_auto_renewal(&alice, deposit_id, &3600);
+
+    // Bob (not depositor) tries to disable auto-renewal
+    let result = vault.try_disable_auto_renewal(&bob, deposit_id);
+    // Should fail auth check
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_get_auto_renewal_config_returns_none_if_not_configured() {
+    let (_env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = vault.get_time() + 3600;
+    let deposit_id = vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+
+    let config = vault.get_auto_renewal_config(&alice, deposit_id);
+    assert!(config.is_none());
+}

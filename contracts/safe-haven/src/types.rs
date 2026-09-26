@@ -17,25 +17,11 @@ pub const INSURANCE_POOL_BPS: u32 = 500; // 5% in basis points
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DepositType {
-    TimeBased,
-    LedgerBased,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DepositRequest {
     pub token: Address,
     pub amount: i128,
     pub unlock_time: u64,
     pub penalty_bps: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DepositType {
-    TimeBased,
-    LedgerBased,
 }
 
 #[contracttype]
@@ -80,6 +66,8 @@ pub enum VaultKey {
     RewardsPool,
     /// Rewards claimed by a staker (track cumulative for auditing)
     StakerRewardsClaimed(Address),
+    /// Auto-renewal configuration for a deposit (maps (depositor, deposit_id) to AutoRenewalConfig)
+    AutoRenewalConfig(Address, u32),
 }
 
 #[contracttype]
@@ -160,10 +148,15 @@ pub struct StakerEntry {
     pub stake_amount: i128,
 }
 
-/// Deposit type indicator — distinguishes between timestamp-based and ledger-based deposits
+/// Auto-renewal configuration for a deposit.
+/// Tracks parameters and state for automatic renewal when a deposit unlocks.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DepositType {
-    TimeBased,
-    LedgerBased,
+pub struct AutoRenewalConfig {
+    /// Whether auto-renewal is currently enabled for this deposit
+    pub enabled: bool,
+    /// Duration in seconds to extend the lock when renewal triggers
+    pub renewal_duration_secs: u64,
+    /// Number of times this deposit has been automatically renewed
+    pub renewal_count: u32,
 }
