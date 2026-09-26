@@ -120,6 +120,36 @@ fn advance_time(env: &Env, seconds: u64) {
 }
 
 #[test]
+fn test_benchmark_stats_and_comparison() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let now = env.ledger().timestamp();
+    let unlock_a = now + 600;
+    let unlock_b = now + 1_800;
+    let unlock_c = now + 3_600;
+
+    vault.deposit(&alice, &token, &1_000, &unlock_a, &0);
+    vault.deposit(&alice, &token, &2_000, &unlock_b, &0);
+    vault.deposit(&alice, &token, &3_000, &unlock_c, &0);
+
+    let stats = vault.get_benchmarks();
+    assert_eq!(stats.sample_count, 3);
+    assert_eq!(stats.median_lock_duration_secs, 1_800);
+    assert_eq!(stats.average_lock_duration_secs, 1_800);
+    assert_eq!(stats.p25_lock_duration_secs, 600);
+    assert_eq!(stats.p75_lock_duration_secs, 3_600);
+    assert_eq!(stats.average_apy_bps, 5_000);
+    assert_eq!(stats.median_apy_bps, 5_000);
+
+    let comparison = vault.compare_to_benchmark(&alice, &0);
+    assert_eq!(comparison.deposit_id, 0);
+    assert_eq!(comparison.apy_delta_bps, 0);
+    assert_eq!(comparison.percentile_rank, 50);
+
+    let history = vault.get_benchmark_history();
+    assert_eq!(history.len(), 1);
+}
+
+#[test]
 fn test_flash_borrow_repay_and_fee_distribution() {
     let (env, vault, token, _admin, alice, _fee) = setup();
     let borrower: Address = Address::generate(&env);
