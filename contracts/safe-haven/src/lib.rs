@@ -15,8 +15,10 @@ mod contract;
 mod errors;
 mod events;
 mod nft;
+mod pq;
 mod storage;
 mod types;
+mod yield_farming;
 
 // Prediction Market modules
 mod prediction_market;
@@ -48,3 +50,6 @@ pub use prediction_market_errors::PredictionMarketError;
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod yield_farming_test;

@@ -89,6 +89,12 @@ pub enum VaultKey {
     StakerRewardsClaimed(Address),
     /// NFT evolution record: maps (depositor, deposit_id) to NFTEvolutionRecord
     NFTEvolution(Address, u32),
+    /// Yield farming configuration at contract level
+    FarmingConfig,
+    /// Yield farming state for a specific deposit (issue #XXX)
+    YieldFarmingState(Address, u32),
+    /// Track claimed farming rewards per depositor (for auditing)
+    FarmingRewardsClaimed(Address),
 }
 
 #[contracttype]
@@ -291,4 +297,73 @@ impl PermissionType {
     pub fn mask(self) -> u32 {
         1u32 << (self as u32)
     }
+}
+
+// ----------------------------------------------------------------
+//  Yield Farming Integration (issue #XXX)
+// ----------------------------------------------------------------
+
+/// Supported yield farming strategies (only approved, low-risk protocols)
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum FarmingStrategy {
+    /// Stable protocol with direct staking rewards
+    DirectStaking = 0,
+    /// Liquidity provision with automated portfolio management
+    LiquidityProvision = 1,
+    /// Conservative lending/borrowing yield strategy
+    LendingYield = 2,
+}
+
+/// State of yield farming for a specific deposit
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FarmingState {
+    /// Whether yield farming is enabled for this deposit
+    pub enabled: bool,
+    /// The strategy being used (only present if enabled)
+    pub strategy: Option<FarmingStrategy>,
+    /// Amount of funds deployed to farming
+    pub deployed_amount: i128,
+    /// Total rewards earned (separate from principal)
+    pub total_rewards: i128,
+    /// Timestamp when farming was enabled
+    pub enabled_at: u64,
+    /// Last timestamp when rewards were claimed
+    pub last_claim_time: u64,
+    /// Address of the farming protocol/contract receiving funds
+    pub protocol_address: Option<Address>,
+}
+
+/// Configuration for yield farming at the contract level
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FarmingConfig {
+    /// Whether yield farming feature is enabled globally
+    pub enabled: bool,
+    /// Approved farming protocols (mapped by strategy)
+    pub approved_protocols: Vec<Address>,
+    /// Minimum amount to enable farming (prevents dust amounts)
+    pub min_farming_amount: i128,
+    /// Maximum proportion of a deposit that can be farmed (in bps, e.g., 9000 = 90%)
+    pub max_farming_proportion_bps: u32,
+    /// Risk level: higher = more conservative (1-10 scale)
+    pub risk_level: u8,
+}
+
+/// Record of a farming reward claim event
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RewardClaimRecord {
+    /// Address of the depositor
+    pub depositor: Address,
+    /// ID of the deposit
+    pub deposit_id: u32,
+    /// Amount of rewards claimed
+    pub amount: i128,
+    /// Timestamp of the claim
+    pub claimed_at: u64,
+    /// Strategy used for farming
+    pub strategy: FarmingStrategy,
 }

@@ -1529,3 +1529,88 @@ pub fn remove_nft_evolution(env: &Env, depositor: &Address, deposit_id: u32) {
     let key = crate::types::VaultKey::NFTEvolution(depositor.clone(), deposit_id);
     env.storage().persistent().remove(&key);
 }
+
+// ================================================================
+//  Yield Farming helpers (issue #XXX)
+// ================================================================
+
+/// Get the global yield farming configuration.
+pub fn get_farming_config(env: &Env) -> Option<crate::types::FarmingConfig> {
+    let key = crate::types::VaultKey::FarmingConfig;
+    env.storage().persistent().get(&key)
+}
+
+/// Set the global yield farming configuration (admin only).
+pub fn set_farming_config(env: &Env, config: &crate::types::FarmingConfig) {
+    let key = crate::types::VaultKey::FarmingConfig;
+    env.storage().persistent().set(&key, config);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+/// Get the yield farming state for a specific deposit.
+pub fn get_farming_state(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+) -> Option<crate::types::FarmingState> {
+    let key = crate::types::VaultKey::YieldFarmingState(depositor.clone(), deposit_id);
+    let state: Option<crate::types::FarmingState> = env.storage().persistent().get(&key);
+    if state.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    }
+    state
+}
+
+/// Get the yield farming state for a specific deposit (read-only).
+pub fn get_farming_state_readonly(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+) -> Option<crate::types::FarmingState> {
+    let key = crate::types::VaultKey::YieldFarmingState(depositor.clone(), deposit_id);
+    env.storage().persistent().get(&key)
+}
+
+/// Set the yield farming state for a specific deposit.
+pub fn set_farming_state(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    state: &crate::types::FarmingState,
+) {
+    let key = crate::types::VaultKey::YieldFarmingState(depositor.clone(), deposit_id);
+    env.storage().persistent().set(&key, state);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+/// Remove yield farming state for a specific deposit.
+pub fn remove_farming_state(env: &Env, depositor: &Address, deposit_id: u32) {
+    let key = crate::types::VaultKey::YieldFarmingState(depositor.clone(), deposit_id);
+    env.storage().persistent().remove(&key);
+}
+
+/// Get total farming rewards claimed by a depositor (for auditing).
+pub fn get_total_farming_rewards_claimed(env: &Env, depositor: &Address) -> i128 {
+    let key = crate::types::VaultKey::FarmingRewardsClaimed(depositor.clone());
+    env.storage()
+        .persistent()
+        .get::<crate::types::VaultKey, i128>(&key)
+        .unwrap_or(0)
+}
+
+/// Add to the total farming rewards claimed by a depositor.
+pub fn add_farming_rewards_claimed(env: &Env, depositor: &Address, amount: i128) {
+    let key = crate::types::VaultKey::FarmingRewardsClaimed(depositor.clone());
+    let current = get_total_farming_rewards_claimed(env, depositor);
+    let new_total = current.saturating_add(amount);
+    env.storage().persistent().set(&key, &new_total);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}

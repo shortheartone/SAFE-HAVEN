@@ -270,3 +270,46 @@ pub fn nft_evolved(
     env.events()
         .publish(topics, (deposit_id, old_stage, new_stage, rarity));
 }
+
+/// Emitted when yield farming is enabled for a deposit (issue #XXX).
+/// Signals that funds have been deployed to a farming strategy.
+pub fn farming_enabled(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    strategy: u8,
+    deployed_amount: i128,
+    protocol: &Address,
+) {
+    let topics = (Symbol::new(env, "farming_enabled"), depositor.clone());
+    env.events()
+        .publish(topics, (deposit_id, strategy, deployed_amount, protocol.clone()));
+}
+
+/// Emitted when farming rewards are claimed (issue #XXX).
+/// Tracks the amount of yield withdrawn from farming.
+pub fn rewards_claimed(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    reward_amount: i128,
+    strategy: u8,
+) {
+    let topics = (Symbol::new(env, "rewards_claimed"), depositor.clone());
+    env.events()
+        .publish(topics, (deposit_id, reward_amount, strategy));
+}
+
+/// Emitted when farming is disabled for a deposit (issue #XXX).
+/// Signals that farmed funds have been withdrawn back to the deposit.
+pub fn farming_disabled(
+    env: &Env,
+    depositor: &Address,
+    deposit_id: u32,
+    withdrawn_amount: i128,
+    rewards_retained: i128,
+) {
+    let topics = (Symbol::new(env, "farming_disabled"), depositor.clone());
+    env.events()
+        .publish(topics, (deposit_id, withdrawn_amount, rewards_retained));
+}

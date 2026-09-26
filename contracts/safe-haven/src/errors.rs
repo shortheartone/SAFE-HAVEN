@@ -43,4 +43,22 @@ pub enum VaultError {
     PotentialSybilAttack = 25,
     /// Sponsorship configuration error
     InvalidSponsorshipConfig = 26,
+    /// Farming not configured at contract level
+    FarmingNotConfigured = 27,
+    /// Farming disabled globally or for deposit
+    FarmingDisabled = 28,
+    /// Farming already enabled for this deposit
+    FarmingAlreadyEnabled = 29,
+    /// Farming not enabled for this deposit
+    FarmingNotEnabled = 30,
+    /// Protocol address not in approved list
+    UnapprovedFarmingProtocol = 31,
+    /// Insufficient funds to enable farming (below minimum)
+    InsufficientFundsForFarming = 32,
+    /// Protocol already in approved list
+    ProtocolAlreadyApproved = 33,
+    /// Invalid parameter provided
+    InvalidParameter = 34,
+    /// Deposit not found
+    DepositNotFound = 35,
 }
