@@ -27,6 +27,33 @@ pub fn withdraw(env: &Env, depositor: &Address, token: &Address, amount: i128, d
     env.events().publish(topics, (amount, deposit_id));
 }
 
+pub fn deposit_renewed(
+    env: &Env,
+    depositor: &Address,
+    token: &Address,
+    deposit_id: u32,
+    amount: i128,
+    old_unlock_time: u64,
+    new_unlock_time: u64,
+    penalty_bps: u32,
+) {
+    let topics = (
+        Symbol::new(env, "deposit_renewed"),
+        depositor.clone(),
+        token.clone(),
+    );
+    env.events().publish(
+        topics,
+        (
+            deposit_id,
+            amount,
+            old_unlock_time,
+            new_unlock_time,
+            penalty_bps,
+        ),
+    );
+}
+
 pub fn emergency_withdraw(
     env: &Env,
     admin: &Address,

@@ -23,6 +23,7 @@ React + TypeScript + Vite frontend for the [SAFE-HAVEN](../contracts/) Soroban s
 | 📊 Dashboard | Live view of all your deposits with countdown timers |
 | 💰 Deposit | Lock any SEP-41 token with custom unlock time and penalty |
 | ⬆️ Withdraw | Claim unlocked tokens or cancel early with penalty |
+| 🔄 Renew | Extend an unlocked timestamp-based deposit without moving its tokens |
 | 🛡️ Admin panel | Pause/unpause + emergency withdrawal (admin only) |
 | 🔗 Explorer links | Every address and tx links to Stellar Expert |
 

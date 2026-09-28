@@ -382,6 +382,60 @@ impl SafeHaven {
         Err(VaultError::NoDepositFound)
     }
 
+    pub fn renew_deposit(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+        new_unlock_time: u64,
+        penalty_bps: u32,
+    ) -> Result<(), VaultError> {
+        depositor.require_auth();
+
+        let mut entry =
+            storage::get_deposit(&env, &depositor, deposit_id).ok_or(VaultError::NoDepositFound)?;
+        let now = env.ledger().timestamp();
+        if now < entry.unlock_time {
+            return Err(VaultError::FundsStillLocked);
+        }
+
+        if new_unlock_time <= now {
+            return Err(VaultError::UnlockTimeNotInFuture);
+        }
+
+        let lock_duration = new_unlock_time.saturating_sub(now);
+        if lock_duration < MIN_LOCK_DURATION_SECS {
+            return Err(VaultError::LockDurationTooShort);
+        }
+        let max_lock = storage::get_max_lock_secs(&env).unwrap_or(MAX_LOCK_DURATION_SECS);
+        if lock_duration > max_lock {
+            return Err(VaultError::LockDurationTooLong);
+        }
+
+        if penalty_bps > 10_000 {
+            return Err(VaultError::InvalidPenaltyBps);
+        }
+        if penalty_bps > 0 && storage::get_fee_recipient(&env).is_none() {
+            return Err(VaultError::MissingFeeRecipient);
+        }
+
+        let old_unlock_time = entry.unlock_time;
+        entry.unlock_time = new_unlock_time;
+        entry.penalty_bps = penalty_bps;
+        storage::update_deposit(&env, &depositor, deposit_id, &entry);
+        events::deposit_renewed(
+            &env,
+            &depositor,
+            &entry.token,
+            deposit_id,
+            entry.amount,
+            old_unlock_time,
+            new_unlock_time,
+            penalty_bps,
+        );
+
+        Ok(())
+    }
+
     pub fn withdraw_to(
         env: Env,
         depositor: Address,

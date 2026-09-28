@@ -65,7 +65,7 @@ extern crate std;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger, LedgerInfo},
     token::{Client as TokenClient, StellarAssetClient},
-    Address, Env,
+    Address, Env, Symbol, TryFromVal,
 };
 
 use crate::{
@@ -602,6 +602,113 @@ fn test_withdraw_before_unlock_fails() {
 
     let result = vault.try_withdraw(&alice, &0);
     assert_eq!(result, Err(Ok(VaultError::FundsStillLocked)));
+}
+
+// ================================================================
+//  renew_deposit
+// ================================================================
+
+#[test]
+fn test_renew_deposit_rejects_locked_deposit() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+
+    assert_eq!(
+        vault.try_renew_deposit(&alice, &0, &(unlock_time + 3600), &500),
+        Err(Ok(VaultError::FundsStillLocked))
+    );
+    assert_eq!(
+        vault.get_vault(&alice, &0).unwrap().unlock_time,
+        unlock_time
+    );
+}
+
+#[test]
+fn test_renew_deposit_updates_terms_and_emits_event() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let old_unlock_time = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &1_000, &old_unlock_time, &0);
+    advance_time(&env, 3601);
+    let new_unlock_time = env.ledger().timestamp() + 7200;
+
+    vault.renew_deposit(&alice, &0, &new_unlock_time, &750);
+
+    let entry = vault.get_vault(&alice, &0).unwrap();
+    assert_eq!(entry.amount, 1_000);
+    assert_eq!(entry.unlock_time, new_unlock_time);
+    assert_eq!(entry.penalty_bps, 750);
+    assert_eq!(vault.get_deposit_ids(&alice).len(), 1);
+
+    let events = env.events().all();
+    let event = events.last().unwrap();
+    assert_eq!(event.0, vault.address);
+    assert_eq!(
+        Symbol::try_from_val(&env, &event.1.get(0).unwrap()).unwrap(),
+        Symbol::new(&env, "deposit_renewed")
+    );
+    let payload: (u32, i128, u64, u64, u32) = event.2.try_into_val(&env).unwrap();
+    assert_eq!(payload, (0, 1_000, old_unlock_time, new_unlock_time, 750));
+}
+
+#[test]
+fn test_renew_deposit_validates_new_term_and_penalty() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let old_unlock_time = env.ledger().timestamp() + 60;
+    vault.deposit(&alice, &token, &1_000, &old_unlock_time, &0);
+    advance_time(&env, 61);
+    let now = env.ledger().timestamp();
+
+    assert_eq!(
+        vault.try_renew_deposit(&alice, &0, &now, &0),
+        Err(Ok(VaultError::UnlockTimeNotInFuture))
+    );
+    assert_eq!(
+        vault.try_renew_deposit(&alice, &0, &(now + 59), &0),
+        Err(Ok(VaultError::LockDurationTooShort))
+    );
+    assert_eq!(
+        vault.try_renew_deposit(&alice, &0, &(now + MAX_LOCK_DURATION_SECS + 1), &0),
+        Err(Ok(VaultError::LockDurationTooLong))
+    );
+    assert_eq!(
+        vault.try_renew_deposit(&alice, &0, &(now + 3600), &10_001),
+        Err(Ok(VaultError::InvalidPenaltyBps))
+    );
+    assert_eq!(
+        vault.try_renew_deposit(&alice, &0, &(now + 3600), &10_000),
+        Ok(Ok(()))
+    );
+}
+
+#[test]
+fn test_renew_deposit_no_deposit_fails() {
+    let (_env, vault, _token, _admin, alice, _fee) = setup();
+    assert_eq!(
+        vault.try_renew_deposit(&alice, &0, &10_000, &0),
+        Err(Ok(VaultError::NoDepositFound))
+    );
+}
+
+#[test]
+fn test_renewed_deposit_withdraws_only_after_new_unlock_time() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let token_client = TokenClient::new(&env, &token);
+    let old_unlock_time = env.ledger().timestamp() + 60;
+    vault.deposit(&alice, &token, &1_000, &old_unlock_time, &0);
+    advance_time(&env, 61);
+    let new_unlock_time = env.ledger().timestamp() + 3600;
+    vault.renew_deposit(&alice, &0, &new_unlock_time, &0);
+
+    advance_time(&env, 3599);
+    assert_eq!(
+        vault.try_withdraw(&alice, &0),
+        Err(Ok(VaultError::FundsStillLocked))
+    );
+    advance_time(&env, 1);
+    vault.withdraw(&alice, &0);
+    assert!(vault.get_vault(&alice, &0).is_none());
+    assert_eq!(token_client.balance(&alice), 10_000);
 }
 
 #[test]
@@ -1375,6 +1482,18 @@ fn test_auth_withdraw_requires_depositor() {
     vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
     advance_time(&env, 3601);
     vault.withdraw(&alice, &0);
+    assert_eq!(env.auths()[0].0, alice);
+}
+
+#[test]
+fn test_auth_renew_deposit_requires_depositor() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let unlock_time = env.ledger().timestamp() + 60;
+    vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+    advance_time(&env, 61);
+    let new_unlock_time = env.ledger().timestamp() + 3600;
+
+    vault.renew_deposit(&alice, &0, &new_unlock_time, &0);
     assert_eq!(env.auths()[0].0, alice);
 }
 

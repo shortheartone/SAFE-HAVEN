@@ -3,7 +3,7 @@ import { useDeposits } from '../hooks/useDeposits'
 import type { ContractInfo } from '../App'
 import { DepositCard } from '../components/DepositCard'
 import { TxStatusBadge } from '../components/TxStatusBadge'
-import { buildWithdraw, buildCancelDeposit, submitTx } from '../lib/stellar'
+import { buildWithdraw, buildCancelDeposit, buildRenewDeposit, submitTx } from '../lib/stellar'
 import { shortAddr } from '../lib/format'
 import type { TxStatus } from '../types'
 import { useState } from 'react'
@@ -86,6 +86,43 @@ export function Dashboard({ contractInfo }: DashboardProps) {
         setTxStatus('error')
         setTxError(result.error)
         toast.error(result.error ?? 'Cancel failed')
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unexpected error'
+      setTxStatus('error')
+      setTxError(msg)
+      toast.error(msg)
+    } finally {
+      setPendingId(null)
+    }
+  }
+
+  async function handleRenew(depositId: number, newUnlockTime: number, penaltyBps: number) {
+    if (!wallet) return
+    setPendingId(depositId)
+    setTxStatus('signing')
+    setTxError(undefined)
+    setTxHash(undefined)
+
+    try {
+      const xdr = await buildRenewDeposit(wallet.address, depositId, newUnlockTime, penaltyBps)
+      if (!xdr) throw new Error('Failed to build transaction')
+
+      const signed = await signTransaction(xdr)
+      if (!signed) { setTxStatus('idle'); return }
+
+      setTxStatus('submitting')
+      const result = await submitTx(signed)
+
+      if (result.success) {
+        setTxStatus('success')
+        setTxHash(result.txHash)
+        toast.success('Deposit renewed successfully!')
+        await refresh()
+      } else {
+        setTxStatus('error')
+        setTxError(result.error)
+        toast.error(result.error ?? 'Deposit renewal failed')
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unexpected error'
@@ -185,6 +222,7 @@ export function Dashboard({ contractInfo }: DashboardProps) {
                 deposit={d}
                 onWithdraw={handleWithdraw}
                 onCancel={handleCancel}
+                onRenew={handleRenew}
                 txPending={pendingId === d.depositId}
               />
             ))}
