@@ -13,7 +13,7 @@ use crate::{
     errors::VaultError,
     events, storage, constants,
     types::{
-        DepositType, MultiTokenVaultEntry, TokenDeposit, VaultEntry, LedgerVaultEntry, Page,
+        CancelPreview, DepositType, MultiTokenVaultEntry, TokenDeposit, VaultEntry, LedgerVaultEntry, Page,
         STORAGE_VERSION, MAX_TOKENS_PER_DEPOSIT, MEVCommitment, MEVDetection, MEVStatus,
         PriceSample, SustainabilityMetrics,
     },
@@ -1594,6 +1594,89 @@ impl SafeHaven {
         }
 
         Err(VaultError::NoDepositFound)
+    }
+
+    // ----------------------------------------------------------------
+    //  Fee Preview (issue #491)
+    // ----------------------------------------------------------------
+
+    /// Returns the estimated penalty and refund amounts for cancelling a deposit,
+    /// without executing the cancellation (issue #491).
+    ///
+    /// This is a pure read-only query — no state changes are made.
+    ///
+    /// # Returns
+    /// A [`CancelPreview`] with:
+    /// - `penalty`: total early-exit penalty
+    /// - `refund`: net amount returned to depositor
+    /// - `fee_recipient_share`: portion going to fee recipient (30%)
+    /// - `staker_share`: portion going to staker rewards pool (70%)
+    /// - `current_amount`: current deposit balance (includes accrued interest if compounding)
+    ///
+    /// Returns `None` if the deposit does not exist or if the deposit is already unlocked
+    /// (no penalty applies for unlocked deposits).
+    pub fn preview_cancel_deposit(
+        env: Env,
+        depositor: Address,
+        deposit_id: u32,
+    ) -> Option<CancelPreview> {
+        // Try timestamp-based deposit first.
+        if let Some(entry) = storage::get_deposit_readonly(&env, &depositor, deposit_id) {
+            let now = env.ledger().timestamp();
+            // If already unlocked, no penalty — cancellation is not available.
+            if now >= entry.unlock_time {
+                return None;
+            }
+
+            // Apply compound interest to get current balance (same logic as cancel_deposit).
+            let current_amount = if entry.compound_frequency_secs > 0 {
+                compute_accrued_amount(
+                    entry.amount,
+                    entry.compound_frequency_secs,
+                    entry.last_accrual_timestamp,
+                    now,
+                )
+            } else {
+                entry.amount
+            };
+
+            let penalty: i128 = (current_amount * entry.penalty_bps as i128) / 10_000;
+            let refund = current_amount.saturating_sub(penalty);
+            let fee_recipient_share: i128 = (penalty * FEE_RECIPIENT_PENALTY_BPS as i128) / 10_000;
+            let staker_share: i128 = penalty.saturating_sub(fee_recipient_share);
+
+            return Some(CancelPreview {
+                penalty,
+                refund,
+                fee_recipient_share,
+                staker_share,
+                current_amount,
+            });
+        }
+
+        // Try ledger-based deposit.
+        if let Some(entry) = storage::get_deposit_by_ledger_readonly(&env, &depositor, deposit_id) {
+            let current_ledger = env.ledger().sequence();
+            // If already past unlock ledger, no penalty.
+            if current_ledger >= entry.unlock_ledger {
+                return None;
+            }
+
+            let penalty: i128 = (entry.amount * entry.penalty_bps as i128) / 10_000;
+            let refund = entry.amount.saturating_sub(penalty);
+            let fee_recipient_share: i128 = (penalty * FEE_RECIPIENT_PENALTY_BPS as i128) / 10_000;
+            let staker_share: i128 = penalty.saturating_sub(fee_recipient_share);
+
+            return Some(CancelPreview {
+                penalty,
+                refund,
+                fee_recipient_share,
+                staker_share,
+                current_amount: entry.amount,
+            });
+        }
+
+        None
     }
 
     // ----------------------------------------------------------------

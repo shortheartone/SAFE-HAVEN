@@ -31,7 +31,7 @@ pub use constants::{
 };
 
 pub use types::{
-    CircuitBreakerActivation, DepositSubscription, DepositType, MultiTokenVaultEntry, Page,
+    CancelPreview, CircuitBreakerActivation, DepositSubscription, DepositType, MultiTokenVaultEntry, Page,
     SubscriptionExecution, SubscriptionStats, TaxLossHarvest, TokenDeposit, STORAGE_VERSION,
     MAX_EMERGENCY_WITHDRAWAL_PER_LEDGER, MAX_TOKENS_PER_DEPOSIT,
 };

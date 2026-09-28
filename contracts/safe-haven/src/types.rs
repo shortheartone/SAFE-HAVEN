@@ -89,6 +89,8 @@ pub enum VaultKey {
     StakerRewardsClaimed(Address),
     /// NFT evolution record: maps (depositor, deposit_id) to NFTEvolutionRecord
     NFTEvolution(Address, u32),
+    /// Rate limit window per depositor (issue #492).
+    RateLimitWindow(Address),
 }
 
 #[contracttype]
@@ -291,4 +293,30 @@ impl PermissionType {
     pub fn mask(self) -> u32 {
         1u32 << (self as u32)
     }
+}
+
+/// Result of a fee calculation preview for deposit cancellation (issue #491).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancelPreview {
+    /// Total penalty amount (in token units).
+    pub penalty: i128,
+    /// Amount returned to the depositor after penalty.
+    pub refund: i128,
+    /// Share of penalty going to the fee recipient.
+    pub fee_recipient_share: i128,
+    /// Share of penalty going to the staker rewards pool.
+    pub staker_share: i128,
+    /// Current deposit amount (may differ from original if compound interest applies).
+    pub current_amount: i128,
+}
+
+/// Tracks deposit rate limiting per depositor (issue #492).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateLimitWindow {
+    /// Timestamp when the current window started.
+    pub window_start: u64,
+    /// Number of deposits created in the current window.
+    pub deposit_count: u32,
 }
