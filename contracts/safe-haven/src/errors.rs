@@ -43,4 +43,20 @@ pub enum VaultError {
     PotentialSybilAttack = 25,
     /// Sponsorship configuration error
     InvalidSponsorshipConfig = 26,
+    /// Depositor exceeded the maximum number of deposits per rate-limiting window (issue #492).
+    DepositRateLimitExceeded = 27,
+    /// Scheduled deposit not found (issue #494).
+    ScheduledDepositNotFound = 30,
+    /// Scheduled deposit execution time has not yet arrived (issue #494).
+    ScheduledDepositNotReady = 31,
+    /// Scheduled deposit has already been executed (issue #494).
+    ScheduledDepositAlreadyExecuted = 32,
+    /// Scheduled deposit has been cancelled (issue #494).
+    ScheduledDepositCancelled = 33,
+    /// No insurance claim found for the given claim_id (issue #493).
+    NoClaimFound = 34,
+    /// Insurance claim has already been resolved (approved or denied) (issue #493).
+    ClaimAlreadyResolved = 35,
+    /// Insurance pool balance is insufficient for the requested claim amount (issue #493).
+    InsufficientInsurancePool = 36,
 }

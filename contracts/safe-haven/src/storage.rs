@@ -1529,3 +1529,75 @@ pub fn remove_nft_evolution(env: &Env, depositor: &Address, deposit_id: u32) {
     let key = crate::types::VaultKey::NFTEvolution(depositor.clone(), deposit_id);
     env.storage().persistent().remove(&key);
 }
+
+// ----------------------------------------------------------------
+//  Rate limiting helpers (issue #492)
+// ----------------------------------------------------------------
+
+/// Get the rate limit window for a depositor (issue #492).
+pub fn get_rate_limit_window(env: &Env, depositor: &Address) -> Option<crate::types::RateLimitWindow> {
+    let key = VaultKey::RateLimitWindow(depositor.clone());
+    env.storage().persistent().get(&key)
+}
+
+/// Set the rate limit window for a depositor (issue #492).
+pub fn set_rate_limit_window(env: &Env, depositor: &Address, window: &crate::types::RateLimitWindow) {
+    let key = VaultKey::RateLimitWindow(depositor.clone());
+    env.storage().persistent().set(&key, window);
+    env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+// ================================================================
+//  Deposit Scheduling Storage (issue #494)
+// ================================================================
+
+/// Get the next schedule ID for a depositor (auto-increments counter).
+pub fn next_schedule_id(env: &Env, depositor: &Address) -> u32 {
+    let key = VaultKey::ScheduleCounter(depositor.clone());
+    let id: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+    env.storage().persistent().set(&key, &id.saturating_add(1));
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    id
+}
+
+/// Store a scheduled deposit.
+pub fn set_scheduled_deposit(
+    env: &Env,
+    depositor: &Address,
+    schedule_id: u32,
+    schedule: &crate::types::ScheduledDeposit,
+) {
+    let key = VaultKey::ScheduledDeposit(depositor.clone(), schedule_id);
+    env.storage().persistent().set(&key, schedule);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+/// Get a scheduled deposit (mutable path — extends TTL).
+pub fn get_scheduled_deposit(
+    env: &Env,
+    depositor: &Address,
+    schedule_id: u32,
+) -> Option<crate::types::ScheduledDeposit> {
+    let key = VaultKey::ScheduledDeposit(depositor.clone(), schedule_id);
+    let result = env.storage().persistent().get(&key);
+    if result.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    }
+    result
+}
+
+/// Get a scheduled deposit (read-only — does not extend TTL).
+pub fn get_scheduled_deposit_readonly(
+    env: &Env,
+    depositor: &Address,
+    schedule_id: u32,
+) -> Option<crate::types::ScheduledDeposit> {
+    let key = VaultKey::ScheduledDeposit(depositor.clone(), schedule_id);
+    env.storage().persistent().get(&key)
+}

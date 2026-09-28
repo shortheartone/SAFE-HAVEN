@@ -9,6 +9,7 @@ use crate::{
     constants::{
         MAX_BATCH_SIZE, MAX_DEPOSIT_AMOUNT, MAX_LOCK_DURATION_SECS, MIN_LOCK_DURATION_SECS,
         MIN_LOCK_LEDGERS, STAKER_PENALTY_BPS, FEE_RECIPIENT_PENALTY_BPS,
+        MAX_DEPOSITS_PER_WINDOW, RATE_LIMIT_WINDOW_SECS,
     },
     errors::VaultError,
     events, storage, constants,
@@ -152,6 +153,41 @@ fn check_tax_wash_sale(
     if let Some(until) = storage::get_tax_wash_sale_until(env, depositor, token) {
         if env.ledger().timestamp() < until {
             return Err(VaultError::TaxWashSalePeriodActive);
+        }
+    }
+    Ok(())
+}
+
+/// Check and update the per-depositor deposit rate limit (issue #492).
+/// Returns Err(DepositRateLimitExceeded) if the limit is exceeded.
+fn check_and_update_rate_limit(env: &Env, depositor: &Address) -> Result<(), VaultError> {
+    let now = env.ledger().timestamp();
+    let window_secs = RATE_LIMIT_WINDOW_SECS;
+    let max_deposits = MAX_DEPOSITS_PER_WINDOW;
+
+    match storage::get_rate_limit_window(env, depositor) {
+        Some(mut window) => {
+            if now < window.window_start.saturating_add(window_secs) {
+                // Still within the current window.
+                if window.deposit_count >= max_deposits {
+                    events::deposit_rate_limited(env, depositor, window.deposit_count, window.window_start);
+                    return Err(VaultError::DepositRateLimitExceeded);
+                }
+                window.deposit_count = window.deposit_count.saturating_add(1);
+            } else {
+                // Window has expired — start a new one.
+                window.window_start = now;
+                window.deposit_count = 1;
+            }
+            storage::set_rate_limit_window(env, depositor, &window);
+        }
+        None => {
+            // First deposit — initialize the window.
+            let window = crate::types::RateLimitWindow {
+                window_start: now,
+                deposit_count: 1,
+            };
+            storage::set_rate_limit_window(env, depositor, &window);
         }
     }
     Ok(())
@@ -638,6 +674,7 @@ impl SafeHaven {
             return Err(VaultError::LockDurationTooShort);
         }
 
+        check_and_update_rate_limit(&env, &depositor)?;
         let deposit_id = storage::next_deposit_id(&env, &depositor);
 
         let token_client = token::Client::new(&env, &token);
@@ -833,6 +870,7 @@ impl SafeHaven {
             return Err(VaultError::LockDurationTooShort);
         }
 
+        check_and_update_rate_limit(&env, &depositor)?;
         let deposit_id = storage::next_deposit_id(&env, &depositor);
 
         let token_client = token::Client::new(&env, &token);
@@ -1018,6 +1056,7 @@ impl SafeHaven {
             return Err(VaultError::LockDurationTooShort);
         }
 
+        check_and_update_rate_limit(&env, &depositor)?;
         let deposit_id = storage::next_deposit_id(&env, &depositor);
 
         let token_client = token::Client::new(&env, &token);
@@ -3763,6 +3802,201 @@ impl SafeHaven {
     ) -> Option<u32> {
         storage::get_nft_evolution_readonly(&env, &depositor, deposit_id)
             .map(|record| record.evolution_count)
+    }
+
+    // ----------------------------------------------------------------
+    //  Issue #494: Deposit Scheduling
+    // ----------------------------------------------------------------
+
+    /// Pre-authorize a deposit to execute at a future time (issue #494).
+    ///
+    /// The depositor authorizes the contract to pull `amount` tokens once
+    /// `execute_after` is reached. The caller must separately approve the
+    /// token spend on the token contract.
+    ///
+    /// # Returns
+    /// A new `schedule_id`.
+    pub fn schedule_deposit(
+        env: Env,
+        depositor: Address,
+        token: Address,
+        amount: i128,
+        unlock_time: u64,
+        penalty_bps: u32,
+        execute_after: u64,
+    ) -> Result<u32, VaultError> {
+        depositor.require_auth();
+
+        if storage::is_paused(&env) {
+            return Err(VaultError::ContractPaused);
+        }
+
+        if amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+
+        let max_deposit = storage::get_max_deposit(&env).unwrap_or(MAX_DEPOSIT_AMOUNT);
+        if amount > max_deposit {
+            return Err(VaultError::AmountTooLarge);
+        }
+
+        if penalty_bps > 10_000 {
+            return Err(VaultError::InvalidPenaltyBps);
+        }
+
+        if penalty_bps > 0 && storage::get_fee_recipient(&env).is_none() {
+            return Err(VaultError::MissingFeeRecipient);
+        }
+
+        let now = env.ledger().timestamp();
+
+        // execute_after must be in the future.
+        if execute_after <= now {
+            return Err(VaultError::UnlockTimeNotInFuture);
+        }
+
+        // unlock_time must be after execute_after.
+        if unlock_time <= execute_after {
+            return Err(VaultError::UnlockTimeNotInFuture);
+        }
+
+        let schedule_id = storage::next_schedule_id(&env, &depositor);
+
+        let schedule = crate::types::ScheduledDeposit {
+            schedule_id,
+            depositor: depositor.clone(),
+            token: token.clone(),
+            amount,
+            unlock_time,
+            penalty_bps,
+            execute_after,
+            status: crate::types::ScheduleStatus::Pending,
+            created_at: now,
+            deposit_id: None,
+        };
+
+        storage::set_scheduled_deposit(&env, &depositor, schedule_id, &schedule);
+        events::deposit_scheduled(&env, &depositor, &token, amount, execute_after, schedule_id);
+
+        Ok(schedule_id)
+    }
+
+    /// Execute a scheduled deposit once the `execute_after` time has been reached (issue #494).
+    ///
+    /// Anyone can trigger execution on behalf of the depositor once the time comes.
+    /// Pulls tokens from the depositor into the contract vault.
+    ///
+    /// # Returns
+    /// The `deposit_id` of the newly created vault entry.
+    pub fn execute_scheduled_deposit(
+        env: Env,
+        executor: Address,
+        depositor: Address,
+        schedule_id: u32,
+    ) -> Result<u32, VaultError> {
+        executor.require_auth();
+
+        if storage::is_paused(&env) {
+            return Err(VaultError::ContractPaused);
+        }
+
+        let mut schedule = storage::get_scheduled_deposit(&env, &depositor, schedule_id)
+            .ok_or(VaultError::ScheduledDepositNotFound)?;
+
+        match schedule.status {
+            crate::types::ScheduleStatus::Executed => {
+                return Err(VaultError::ScheduledDepositAlreadyExecuted);
+            }
+            crate::types::ScheduleStatus::Cancelled => {
+                return Err(VaultError::ScheduledDepositCancelled);
+            }
+            crate::types::ScheduleStatus::Pending => {}
+        }
+
+        let now = env.ledger().timestamp();
+        if now < schedule.execute_after {
+            return Err(VaultError::ScheduledDepositNotReady);
+        }
+
+        // Pull tokens from depositor.
+        let token_client = soroban_sdk::token::Client::new(&env, &schedule.token);
+        token_client.transfer(
+            &schedule.depositor,
+            &env.current_contract_address(),
+            &schedule.amount,
+        );
+
+        // Create the vault entry.
+        let deposit_id = storage::next_deposit_id(&env, &schedule.depositor);
+        let entry = VaultEntry {
+            token: schedule.token.clone(),
+            amount: schedule.amount,
+            unlock_time: schedule.unlock_time,
+            depositor: schedule.depositor.clone(),
+            penalty_bps: schedule.penalty_bps,
+            compound_frequency_secs: 0,
+            last_accrual_timestamp: now,
+        };
+
+        storage::set_deposit(&env, &schedule.depositor, deposit_id, &entry);
+        storage::add_depositor(&env, &schedule.depositor);
+
+        // Update schedule status.
+        schedule.status = crate::types::ScheduleStatus::Executed;
+        schedule.deposit_id = Some(deposit_id);
+        storage::set_scheduled_deposit(&env, &depositor, schedule_id, &schedule);
+
+        events::deposit(
+            &env,
+            &schedule.depositor,
+            &schedule.token,
+            schedule.amount,
+            schedule.unlock_time,
+            deposit_id,
+        );
+        events::scheduled_deposit_executed(&env, &depositor, schedule_id, deposit_id);
+
+        Ok(deposit_id)
+    }
+
+    /// Cancel a pending scheduled deposit (issue #494).
+    ///
+    /// Only the depositor can cancel their own scheduled deposit.
+    /// No tokens are moved — the deposit was never executed.
+    pub fn cancel_scheduled_deposit(
+        env: Env,
+        depositor: Address,
+        schedule_id: u32,
+    ) -> Result<(), VaultError> {
+        depositor.require_auth();
+
+        let mut schedule = storage::get_scheduled_deposit(&env, &depositor, schedule_id)
+            .ok_or(VaultError::ScheduledDepositNotFound)?;
+
+        match schedule.status {
+            crate::types::ScheduleStatus::Executed => {
+                return Err(VaultError::ScheduledDepositAlreadyExecuted);
+            }
+            crate::types::ScheduleStatus::Cancelled => {
+                return Err(VaultError::ScheduledDepositCancelled);
+            }
+            crate::types::ScheduleStatus::Pending => {}
+        }
+
+        schedule.status = crate::types::ScheduleStatus::Cancelled;
+        storage::set_scheduled_deposit(&env, &depositor, schedule_id, &schedule);
+
+        events::scheduled_deposit_cancelled(&env, &depositor, schedule_id);
+        Ok(())
+    }
+
+    /// Query a scheduled deposit (read-only, issue #494).
+    pub fn get_scheduled_deposit(
+        env: Env,
+        depositor: Address,
+        schedule_id: u32,
+    ) -> Option<crate::types::ScheduledDeposit> {
+        storage::get_scheduled_deposit_readonly(&env, &depositor, schedule_id)
     }
 }
 
