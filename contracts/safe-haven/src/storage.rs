@@ -1529,3 +1529,141 @@ pub fn remove_nft_evolution(env: &Env, depositor: &Address, deposit_id: u32) {
     let key = crate::types::VaultKey::NFTEvolution(depositor.clone(), deposit_id);
     env.storage().persistent().remove(&key);
 }
+
+// ----------------------------------------------------------------
+//  Rate limiting helpers (issue #492)
+// ----------------------------------------------------------------
+
+/// Get the rate limit window for a depositor (issue #492).
+pub fn get_rate_limit_window(env: &Env, depositor: &Address) -> Option<crate::types::RateLimitWindow> {
+    let key = VaultKey::RateLimitWindow(depositor.clone());
+    env.storage().persistent().get(&key)
+}
+
+/// Set the rate limit window for a depositor (issue #492).
+pub fn set_rate_limit_window(env: &Env, depositor: &Address, window: &crate::types::RateLimitWindow) {
+    let key = VaultKey::RateLimitWindow(depositor.clone());
+    env.storage().persistent().set(&key, window);
+    env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+// ================================================================
+//  Deposit Scheduling Storage (issue #494)
+// ================================================================
+
+/// Get the next schedule ID for a depositor (auto-increments counter).
+pub fn next_schedule_id(env: &Env, depositor: &Address) -> u32 {
+    let key = VaultKey::ScheduleCounter(depositor.clone());
+    let id: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+    env.storage().persistent().set(&key, &id.saturating_add(1));
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    id
+}
+
+/// Store a scheduled deposit.
+pub fn set_scheduled_deposit(
+    env: &Env,
+    depositor: &Address,
+    schedule_id: u32,
+    schedule: &crate::types::ScheduledDeposit,
+) {
+    let key = VaultKey::ScheduledDeposit(depositor.clone(), schedule_id);
+    env.storage().persistent().set(&key, schedule);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+/// Get a scheduled deposit (mutable path — extends TTL).
+pub fn get_scheduled_deposit(
+    env: &Env,
+    depositor: &Address,
+    schedule_id: u32,
+) -> Option<crate::types::ScheduledDeposit> {
+    let key = VaultKey::ScheduledDeposit(depositor.clone(), schedule_id);
+    let result = env.storage().persistent().get(&key);
+    if result.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    }
+    result
+}
+
+/// Get a scheduled deposit (read-only — does not extend TTL).
+pub fn get_scheduled_deposit_readonly(
+    env: &Env,
+    depositor: &Address,
+    schedule_id: u32,
+) -> Option<crate::types::ScheduledDeposit> {
+    let key = VaultKey::ScheduledDeposit(depositor.clone(), schedule_id);
+    env.storage().persistent().get(&key)
+}
+
+// ================================================================
+//  Insurance Pool Storage (issue #493)
+// ================================================================
+
+/// Get the insurance pool balance for a specific token.
+pub fn get_insurance_pool_balance(env: &Env, token: &Address) -> i128 {
+    let key = VaultKey::InsurancePoolBalance(token.clone());
+    env.storage().persistent().get(&key).unwrap_or(0)
+}
+
+/// Add to the insurance pool balance for a specific token.
+pub fn add_insurance_pool_balance(env: &Env, token: &Address, amount: i128) {
+    let key = VaultKey::InsurancePoolBalance(token.clone());
+    let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+    env.storage().persistent().set(&key, &current.saturating_add(amount));
+    env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+/// Deduct from the insurance pool balance. Returns error if insufficient.
+pub fn deduct_insurance_pool_balance(
+    env: &Env,
+    token: &Address,
+    amount: i128,
+) -> Result<(), crate::errors::VaultError> {
+    let key = VaultKey::InsurancePoolBalance(token.clone());
+    let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+    if current < amount {
+        return Err(crate::errors::VaultError::InsufficientInsurancePool);
+    }
+    env.storage().persistent().set(&key, &current.saturating_sub(amount));
+    env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    Ok(())
+}
+
+/// Get the next insurance claim ID (global monotonic counter).
+pub fn next_claim_id(env: &Env) -> u32 {
+    let key = VaultKey::InsuranceClaimCounter;
+    let id: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+    env.storage().persistent().set(&key, &id.saturating_add(1));
+    env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    id
+}
+
+/// Store an insurance claim.
+pub fn set_claim(env: &Env, claim_id: u32, claim: &crate::types::InsuranceClaim) {
+    let key = VaultKey::InsuranceClaim(claim_id);
+    env.storage().persistent().set(&key, claim);
+    env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+/// Get an insurance claim (mutable path — extends TTL).
+pub fn get_claim(env: &Env, claim_id: u32) -> Option<crate::types::InsuranceClaim> {
+    let key = VaultKey::InsuranceClaim(claim_id);
+    let result = env.storage().persistent().get(&key);
+    if result.is_some() {
+        env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    }
+    result
+}
+
+/// Get an insurance claim (read-only — does not extend TTL).
+pub fn get_claim_readonly(env: &Env, claim_id: u32) -> Option<crate::types::InsuranceClaim> {
+    let key = VaultKey::InsuranceClaim(claim_id);
+    env.storage().persistent().get(&key)
+}

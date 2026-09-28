@@ -33,6 +33,9 @@ pub const STAKER_PENALTY_BPS: u32 = 7_000;
 /// Fee recipient penalty split: percentage of penalties allocated to fee recipient (30% = 3000 basis points)
 pub const FEE_RECIPIENT_PENALTY_BPS: u32 = 3_000;
 
+/// Premium charged on insured deposits (1% in basis points) (issue #493).
+pub const INSURANCE_PREMIUM_BPS: u32 = 100;
+
 // ================================================================
 // MEV PROTECTION CONSTANTS
 // ================================================================
@@ -48,3 +51,10 @@ pub const RENEWABLE_ENERGY_BASELINE: u32 = 50;
 
 /// Carbon baseline: grams CO2e per unit per second (1 gram per unit-second)
 pub const CARBON_BASELINE_PER_UNIT_SECOND: i128 = 1;
+
+/// Maximum deposits allowed per rate-limiting window per depositor (issue #492).
+pub const MAX_DEPOSITS_PER_WINDOW: u32 = 10;
+
+/// Duration of the rate-limiting window in seconds (1 hour) (issue #492).
+pub const RATE_LIMIT_WINDOW_SECS: u64 = 3_600;
+

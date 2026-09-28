@@ -89,6 +89,18 @@ pub enum VaultKey {
     StakerRewardsClaimed(Address),
     /// NFT evolution record: maps (depositor, deposit_id) to NFTEvolutionRecord
     NFTEvolution(Address, u32),
+    /// Rate limit window per depositor (issue #492).
+    RateLimitWindow(Address),
+    /// Scheduled deposit entry (issue #494).
+    ScheduledDeposit(Address, u32),
+    /// Counter for scheduled deposit IDs per depositor (issue #494).
+    ScheduleCounter(Address),
+    /// Insurance pool balance per token (issue #493).
+    InsurancePoolBalance(Address),
+    /// Insurance claim counter (global monotonic) (issue #493).
+    InsuranceClaimCounter,
+    /// Insurance claim entry (issue #493).
+    InsuranceClaim(u32),
 }
 
 #[contracttype]
@@ -291,4 +303,89 @@ impl PermissionType {
     pub fn mask(self) -> u32 {
         1u32 << (self as u32)
     }
+}
+
+/// Result of a fee calculation preview for deposit cancellation (issue #491).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancelPreview {
+    /// Total penalty amount (in token units).
+    pub penalty: i128,
+    /// Amount returned to the depositor after penalty.
+    pub refund: i128,
+    /// Share of penalty going to the fee recipient.
+    pub fee_recipient_share: i128,
+    /// Share of penalty going to the staker rewards pool.
+    pub staker_share: i128,
+    /// Current deposit amount (may differ from original if compound interest applies).
+    pub current_amount: i128,
+}
+
+/// Tracks deposit rate limiting per depositor (issue #492).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateLimitWindow {
+    /// Timestamp when the current window started.
+    pub window_start: u64,
+    /// Number of deposits created in the current window.
+    pub deposit_count: u32,
+}
+
+/// Status of a scheduled deposit (issue #494).
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ScheduleStatus {
+    /// Awaiting execution.
+    Pending = 0,
+    /// Successfully executed — a VaultEntry has been created.
+    Executed = 1,
+    /// Cancelled by the depositor before execution.
+    Cancelled = 2,
+}
+
+/// A pre-authorized deposit that executes at a future time (issue #494).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScheduledDeposit {
+    /// Unique ID for this scheduled deposit.
+    pub schedule_id: u32,
+    /// Account that authorized the scheduled deposit.
+    pub depositor: Address,
+    /// Token to deposit.
+    pub token: Address,
+    /// Amount to deposit when executed.
+    pub amount: i128,
+    /// Lock expiry time for the created vault entry.
+    pub unlock_time: u64,
+    /// Early-exit penalty in basis points.
+    pub penalty_bps: u32,
+    /// Earliest time at which this schedule can be executed.
+    pub execute_after: u64,
+    /// Current status.
+    pub status: ScheduleStatus,
+    /// Timestamp when this schedule was created.
+    pub created_at: u64,
+    /// deposit_id of the created vault entry (set on execution).
+    pub deposit_id: Option<u32>,
+}
+
+/// Status of an insurance claim (issue #493).
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ClaimStatus {
+    Pending = 0,
+    Approved = 1,
+    Denied = 2,
+}
+
+/// An insurance claim filed against the pool (issue #493).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InsuranceClaim {
+    pub claim_id: u32,
+    pub claimant: Address,
+    pub token: Address,
+    pub amount_requested: i128,
+    pub incident_evidence: soroban_sdk::String,
+    pub status: ClaimStatus,
 }

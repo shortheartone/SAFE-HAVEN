@@ -270,3 +270,105 @@ pub fn nft_evolved(
     env.events()
         .publish(topics, (deposit_id, old_stage, new_stage, rarity));
 }
+
+/// Emitted when a deposit is blocked by rate limiting (issue #492).
+pub fn deposit_rate_limited(env: &Env, depositor: &Address, deposit_count: u32, window_start: u64) {
+    let topics = (Symbol::new(env, "rate_limited"), depositor.clone());
+    env.events().publish(topics, (deposit_count, window_start));
+}
+
+/// Emitted when a deposit is scheduled (issue #494).
+pub fn deposit_scheduled(
+    env: &Env,
+    depositor: &Address,
+    token: &Address,
+    amount: i128,
+    execute_after: u64,
+    schedule_id: u32,
+) {
+    let topics = (Symbol::new(env, "dep_scheduled"), depositor.clone(), token.clone());
+    env.events().publish(topics, (amount, execute_after, schedule_id));
+}
+
+/// Emitted when a scheduled deposit is executed (issue #494).
+pub fn scheduled_deposit_executed(
+    env: &Env,
+    depositor: &Address,
+    schedule_id: u32,
+    deposit_id: u32,
+) {
+    let topics = (Symbol::new(env, "sched_executed"), depositor.clone());
+    env.events().publish(topics, (schedule_id, deposit_id));
+}
+
+/// Emitted when a scheduled deposit is cancelled (issue #494).
+pub fn scheduled_deposit_cancelled(env: &Env, depositor: &Address, schedule_id: u32) {
+    let topics = (Symbol::new(env, "sched_cancel"), depositor.clone());
+    env.events().publish(topics, schedule_id);
+}
+
+/// Emitted when a penalty is split between fee recipient and stakers (or insurance pool).
+pub fn penalty_split(
+    env: &Env,
+    depositor: &Address,
+    penalty: i128,
+    fee_recipient_share: i128,
+    stakers_share: i128,
+    deposit_id: u32,
+) {
+    let topics = (Symbol::new(env, "penalty_split"), depositor.clone());
+    env.events()
+        .publish(topics, (penalty, fee_recipient_share, stakers_share, deposit_id));
+}
+
+/// Emitted when a staker registers or updates their stake.
+pub fn staker_registered(env: &Env, staker: &Address, amount: i128) {
+    let topics = (Symbol::new(env, "staker_reg"), staker.clone());
+    env.events().publish(topics, amount);
+}
+
+/// Emitted when a staker claims their rewards.
+pub fn rewards_claimed(env: &Env, staker: &Address, amount: i128) {
+    let topics = (Symbol::new(env, "rewards_claimed"), staker.clone());
+    env.events().publish(topics, amount);
+}
+
+// ================================================================
+//  Insurance Pool Events (issue #493)
+// ================================================================
+
+/// Emitted when an insurance claim is filed (issue #493).
+pub fn insurance_claim_filed(
+    env: &Env,
+    claimant: &Address,
+    token: &Address,
+    claim_id: u32,
+    amount_requested: i128,
+) {
+    let topics = (Symbol::new(env, "ins_claim_filed"), claimant.clone(), token.clone());
+    env.events().publish(topics, (claim_id, amount_requested));
+}
+
+/// Emitted when an insurance claim is approved (issue #493).
+pub fn insurance_claim_approved(
+    env: &Env,
+    admin: &Address,
+    claimant: &Address,
+    claim_id: u32,
+    amount_disbursed: i128,
+) {
+    let topics = (Symbol::new(env, "ins_claim_appvd"), admin.clone());
+    env.events().publish(topics, (claimant.clone(), claim_id, amount_disbursed));
+}
+
+/// Emitted when an insurance claim is denied (issue #493).
+pub fn insurance_claim_denied(env: &Env, admin: &Address, claim_id: u32) {
+    let topics = (Symbol::new(env, "ins_claim_denied"), admin.clone());
+    env.events().publish(topics, claim_id);
+}
+
+/// Emitted when the insurance pool receives funds (issue #493).
+pub fn insurance_pool_funded(env: &Env, token: &Address, amount: i128, new_balance: i128) {
+    let topics = (Symbol::new(env, "ins_pool_funded"), token.clone());
+    env.events().publish(topics, (amount, new_balance));
+}

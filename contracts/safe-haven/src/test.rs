@@ -4483,6 +4483,26 @@ fn test_insurance_pool_funded_from_penalty() {
 }
 
 #[test]
+fn test_insured_deposit_charges_premium_and_funds_pool() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+    let token_client = TokenClient::new(&env, &token);
+    let balance_before = token_client.balance(&alice);
+    let unlock_time = env.ledger().timestamp() + 120;
+
+    let deposit_id = vault.deposit_with_insurance(
+        &alice,
+        &token,
+        &10_000_i128,
+        &unlock_time,
+        &0_u32,
+    );
+
+    assert_eq!(token_client.balance(&alice), balance_before - 10_100);
+    assert_eq!(vault.get_insurance_pool_balance(&token), 100);
+    assert_eq!(vault.get_deposit_ids(&alice).len(), 1);
+}
+
+#[test]
 fn test_insurance_pool_accumulates_across_cancellations() {
     let (env, vault, token, _admin, alice, _fee) = setup();
 
