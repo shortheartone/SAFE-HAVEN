@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { xlmToStroops, stroopsToXlm } from '../lib/format'
+import { xlmToStroops, stroopsToXlm, formatDuration, dateTimeLocalToUnixSeconds, amountToBaseUnits, baseUnitsToAmount } from '../lib/format'
 import { CONFIG } from '../config'
 
 // ================================================================
@@ -17,16 +17,20 @@ function validateDeposit(params: {
   maxDeposit: bigint
   maxLockSecs: number
   isPaused: boolean
+  tokenDecimals?: number
 }) {
-  const { amount, unlockDate, penaltyBps, maxDeposit, maxLockSecs, isPaused } = params
+  const { amount, unlockDate, penaltyBps, maxDeposit, maxLockSecs, isPaused, tokenDecimals = 7 } = params
 
   const amountNum = parseFloat(amount)
   const penaltyBpsNum = parseInt(penaltyBps, 10)
   const unlockTimestamp = unlockDate
-    ? Math.floor(new Date(unlockDate).getTime() / 1000)
+    ? dateTimeLocalToUnixSeconds(unlockDate)
     : 0
   const nowSecs = Math.floor(Date.now() / 1000)
   const lockDuration = unlockTimestamp - nowSecs
+
+  // Convert amount to base units using token decimals
+  const amountInBaseUnits = amount ? amountToBaseUnits(amount, tokenDecimals) : 0n
 
   const errors: Record<string, string> = {}
 
@@ -35,9 +39,8 @@ function validateDeposit(params: {
     errors.amount = 'Amount must be > 0'
   } else if (amount) {
     try {
-      const stroops = xlmToStroops(amount)
-      if (stroops > maxDeposit) {
-        errors.amount = `Max: ${stroopsToXlm(maxDeposit)} XLM`
+      if (amountInBaseUnits > maxDeposit) {
+        errors.amount = `Max: ${baseUnitsToAmount(maxDeposit, tokenDecimals)} tokens`
       }
     } catch {
       errors.amount = 'Invalid amount format'
@@ -48,9 +51,9 @@ function validateDeposit(params: {
   if (unlockDate && unlockTimestamp <= nowSecs) {
     errors.unlock = 'Must be in the future'
   } else if (unlockDate && lockDuration < CONFIG.MIN_LOCK_DURATION_SECS) {
-    errors.unlock = `Minimum lock: ${CONFIG.MIN_LOCK_DURATION_SECS}s`
+    errors.unlock = `Minimum lock: ${formatDuration(CONFIG.MIN_LOCK_DURATION_SECS)}`
   } else if (unlockDate && lockDuration > maxLockSecs) {
-    errors.unlock = `Max lock: ${maxLockSecs}s`
+    errors.unlock = `Max lock: ${formatDuration(maxLockSecs)}`
   }
 
   // Penalty validation
