@@ -478,6 +478,20 @@ export async function buildWithdraw(
   ])
 }
 
+export async function buildRenewDeposit(
+  depositor: string,
+  depositId: number,
+  newUnlockTime: number,
+  penaltyBps: number,
+): Promise<string | null> {
+  return buildTx(depositor, 'renew_deposit', [
+    new Address(depositor).toScVal(),
+    nativeToScVal(depositId, { type: 'u32' }),
+    nativeToScVal(newUnlockTime, { type: 'u64' }),
+    nativeToScVal(penaltyBps, { type: 'u32' }),
+  ])
+}
+
 export async function buildCancelDeposit(
   depositor: string,
   depositId: number,

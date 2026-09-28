@@ -134,8 +134,9 @@ Deployment artifacts are written to `deployments/<network>/<timestamp>/`, includ
 3. **Verification** - On `withdraw()`, contract checks `ledger.timestamp() >= unlock_time`
 4. **Unlock** - Tokens returned to depositor. Otherwise call fails with `FundsStillLocked`
 5. **Early exit** - `cancel_deposit()` returns funds minus penalty; penalty goes to `fee_recipient`
-6. **Admin recovery** - Admin can emergency-withdraw any deposit (funds always go to depositor, never admin)
-7. **Trustless mode** - Admin can be permanently renounced via `renounce_admin()`
+6. **Renewal** - The depositor can call `renew_deposit()` after unlock to set a new unlock time and penalty without moving or changing the amount
+7. **Admin recovery** - Admin can emergency-withdraw any deposit (funds always go to depositor, never admin)
+8. **Trustless mode** - Admin can be permanently renounced via `renounce_admin()`
 
 ---
 
@@ -351,6 +352,9 @@ If a user cancels a deposit with 100 tokens penalty (10% of 1000):
 - Staker Rewards Pool receives 70 tokens (100 × 0.70)
 
 Registered stakers can then claim their proportional share of the rewards pool based on their stake amount relative to total staked.
+
+#### `renew_deposit(depositor, deposit_id, new_unlock_time, penalty_bps)`
+Renews an existing timestamp-based deposit after its current unlock time has been reached. The depositor must authorize the call. The new unlock time must be in the future and satisfy the configured minimum and maximum lock duration; the penalty must be 0–10000 basis points and requires a configured fee recipient when non-zero. The amount and deposit ID remain unchanged. A `deposit_renewed` event includes the depositor, token, deposit ID, unchanged amount, old and new unlock times, and updated penalty. The deposit becomes withdrawable again when the new unlock time is reached. Ledger-based deposits are not renewable.
 
 ---
 

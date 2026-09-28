@@ -13,7 +13,7 @@ interface UseDepositsResult {
   deposits: Deposit[]
   loading: boolean
   error: string | null
-  refresh: () => void
+  refresh: () => Promise<void>
   pollRemoveDeposit: (depositId: number, maxAttempts?: number) => Promise<void>
 }
 

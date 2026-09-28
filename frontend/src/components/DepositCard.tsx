@@ -8,10 +8,17 @@ interface DepositCardProps {
   deposit: Deposit
   onWithdraw: (depositId: number) => void
   onCancel: (depositId: number) => void
+  onRenew: (depositId: number, newUnlockTime: number, penaltyBps: number) => void
   txPending: boolean
 }
 
-export function DepositCard({ deposit, onWithdraw, onCancel, txPending }: DepositCardProps) {
+function toLocalDateTimeValue(timestamp: number): string {
+  const date = new Date(timestamp * 1000)
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset())
+  return date.toISOString().slice(0, 16)
+}
+
+export function DepositCard({ deposit, onWithdraw, onCancel, onRenew, txPending }: DepositCardProps) {
   const [showDetails, setShowDetails] = useState(false)
   const { getPrice } = usePrice()
 
@@ -113,6 +120,51 @@ export function DepositCard({ deposit, onWithdraw, onCancel, txPending }: Deposi
           <span className="text-slate-500">Unlock time</span>
           <span className="text-slate-300 font-mono text-xs truncate">{deposit.unlockTime}</span>
         </div>
+      )}
+
+      {showRenewal && isUnlocked && (
+        <form onSubmit={submitRenewal} className="mt-4 p-3 rounded-lg border border-stellar-700/40 bg-slate-900/40 space-y-3">
+          <label className="block text-xs text-slate-400">
+            New unlock date and time
+            <input
+              className="input mt-1 w-full"
+              type="datetime-local"
+              min={toLocalDateTimeValue(Math.floor(Date.now() / 1000) + CONFIG.MIN_LOCK_DURATION_SECS)}
+              value={newUnlockTime}
+              onChange={(event) => setNewUnlockTime(event.target.value)}
+              required
+              disabled={txPending}
+            />
+          </label>
+          <label className="block text-xs text-slate-400">
+            Early-exit penalty (basis points)
+            <input
+              className="input mt-1 w-full"
+              type="number"
+              min="0"
+              max={CONFIG.MAX_PENALTY_BPS}
+              step="1"
+              value={penaltyBps}
+              onChange={(event) => setPenaltyBps(event.target.value)}
+              required
+              disabled={txPending}
+            />
+          </label>
+          {renewalError && <p className="text-xs text-red-400">{renewalError}</p>}
+          <div className="flex gap-2">
+            <button className="btn-primary flex-1" type="submit" disabled={txPending}>
+              Renew deposit
+            </button>
+            <button
+              className="btn-secondary"
+              type="button"
+              onClick={() => { setShowRenewal(false); setRenewalError(null) }}
+              disabled={txPending}
+            >
+              Close
+            </button>
+          </div>
+        </form>
       )}
 
       {/* Actions */}

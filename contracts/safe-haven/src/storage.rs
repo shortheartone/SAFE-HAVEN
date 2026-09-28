@@ -210,6 +210,14 @@ pub fn set_deposit(env: &Env, depositor: &Address, deposit_id: u32, entry: &Vaul
     add_active_deposit_id(env, depositor, deposit_id);
 }
 
+pub fn update_deposit(env: &Env, depositor: &Address, deposit_id: u32, entry: &VaultEntry) {
+    let key = VaultKey::Deposit(depositor.clone(), deposit_id);
+    env.storage().persistent().set(&key, entry);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
 pub fn get_deposit(env: &Env, depositor: &Address, deposit_id: u32) -> Option<VaultEntry> {
     let key = VaultKey::Deposit(depositor.clone(), deposit_id);
     let entry: Option<VaultEntry> = env.storage().persistent().get(&key);
