@@ -8,7 +8,7 @@ use soroban_sdk::{contract, contractimpl, token, Address, Bytes, Env, String, Sy
 use crate::{
     constants::{
         MAX_BATCH_SIZE, MAX_DEPOSIT_AMOUNT, MAX_LOCK_DURATION_SECS, MIN_LOCK_DURATION_SECS,
-        MIN_LOCK_LEDGERS, STAKER_PENALTY_BPS, FEE_RECIPIENT_PENALTY_BPS,
+        MIN_LOCK_LEDGERS, FEE_RECIPIENT_PENALTY_BPS,
         MAX_DEPOSITS_PER_WINDOW, RATE_LIMIT_WINDOW_SECS,
     },
     errors::VaultError,
@@ -740,6 +740,43 @@ impl SafeHaven {
             0
         };
         check_sustainability_milestones(&env, &depositor, total_carbon, total_offset, average_renewable);
+
+        Ok(deposit_id)
+    }
+
+    /// Create a deposit and opt in to insurance coverage by paying a 1% premium.
+    ///
+    /// The premium is charged in addition to `amount` and is added to the pool
+    /// for `token`. The depositor must authorize both token transfers.
+    pub fn deposit_with_insurance(
+        env: Env,
+        depositor: Address,
+        token: Address,
+        amount: i128,
+        unlock_time: u64,
+        penalty_bps: u32,
+    ) -> Result<u32, VaultError> {
+        let deposit_id = Self::deposit(
+            env.clone(),
+            depositor.clone(),
+            token.clone(),
+            amount,
+            unlock_time,
+            penalty_bps,
+        )?;
+
+        let premium = (amount / 10_000) * constants::INSURANCE_PREMIUM_BPS as i128
+            + ((amount % 10_000) * constants::INSURANCE_PREMIUM_BPS as i128 + 9_999) / 10_000;
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&depositor, &env.current_contract_address(), &premium);
+
+        storage::add_insurance_pool_balance(&env, &token, premium);
+        events::insurance_pool_funded(
+            &env,
+            &token,
+            premium,
+            storage::get_insurance_pool_balance(&env, &token),
+        );
 
         Ok(deposit_id)
     }
@@ -1523,9 +1560,9 @@ impl SafeHaven {
             let penalty: i128 = (entry.amount * entry.penalty_bps as i128) / 10_000;
             let refund = entry.amount.saturating_sub(penalty);
 
-            // Split penalty: fee_recipient gets FEE_RECIPIENT_PENALTY_BPS, stakers get STAKER_PENALTY_BPS
-            let fee_recipient_share: i128 = (penalty * FEE_RECIPIENT_PENALTY_BPS as i128) / 10_000;
-            let stakers_share: i128 = penalty - fee_recipient_share;
+            // Split penalty: 5% to insurance pool and the remainder to the fee recipient.
+            let insurance_cut: i128 = (penalty * crate::types::INSURANCE_POOL_BPS as i128) / 10_000;
+            let fee_recipient_share: i128 = penalty.saturating_sub(insurance_cut);
 
             if penalty > 0 {
                 let fee_recipient =
@@ -1533,10 +1570,10 @@ impl SafeHaven {
                 if fee_recipient_share > 0 {
                     token_client.transfer(&contract, &fee_recipient, &fee_recipient_share);
                 }
-                // Add stakers_share to rewards pool
-                if stakers_share > 0 {
-                    let current_pool = storage::get_rewards_pool(&env);
-                    storage::set_rewards_pool(&env, current_pool + stakers_share);
+                // Add insurance cut to the insurance pool for this token
+                if insurance_cut > 0 {
+                    storage::add_insurance_pool_balance(&env, &entry.token, insurance_cut);
+                    events::insurance_pool_funded(&env, &entry.token, insurance_cut, storage::get_insurance_pool_balance(&env, &entry.token));
                 }
             }
             if refund > 0 {
@@ -1547,7 +1584,7 @@ impl SafeHaven {
             // Clean up NFT evolution record on cancellation
             storage::remove_nft_evolution(&env, &depositor, deposit_id);
             storage::remove_sustainability_metrics(&env, &depositor, deposit_id);
-            events::penalty_split(&env, &depositor, penalty, fee_recipient_share, stakers_share, deposit_id);
+            events::penalty_split(&env, &depositor, penalty, fee_recipient_share, 0, deposit_id);
             events::deposit_cancelled(&env, &depositor, &entry.token, entry.amount, penalty, deposit_id);
             return Ok(());
         }
@@ -1571,9 +1608,9 @@ impl SafeHaven {
             let penalty: i128 = (entry.amount * entry.penalty_bps as i128) / 10_000;
             let refund = entry.amount.saturating_sub(penalty);
 
-            // Split penalty: fee_recipient gets FEE_RECIPIENT_PENALTY_BPS, stakers get STAKER_PENALTY_BPS
-            let fee_recipient_share: i128 = (penalty * FEE_RECIPIENT_PENALTY_BPS as i128) / 10_000;
-            let stakers_share: i128 = penalty - fee_recipient_share;
+            // Split penalty: 5% to insurance pool and the remainder to the fee recipient.
+            let insurance_cut: i128 = (penalty * crate::types::INSURANCE_POOL_BPS as i128) / 10_000;
+            let fee_recipient_share: i128 = penalty.saturating_sub(insurance_cut);
 
             if penalty > 0 {
                 let fee_recipient =
@@ -1581,17 +1618,21 @@ impl SafeHaven {
                 if fee_recipient_share > 0 {
                     token_client.transfer(&contract, &fee_recipient, &fee_recipient_share);
                 }
-                // Add stakers_share to rewards pool
-                if stakers_share > 0 {
-                    let current_pool = storage::get_rewards_pool(&env);
-                    storage::set_rewards_pool(&env, current_pool + stakers_share);
+                if insurance_cut > 0 {
+                    storage::add_insurance_pool_balance(&env, &entry.token, insurance_cut);
+                    events::insurance_pool_funded(
+                        &env,
+                        &entry.token,
+                        insurance_cut,
+                        storage::get_insurance_pool_balance(&env, &entry.token),
+                    );
                 }
             }
             if refund > 0 {
                 token_client.transfer(&contract, &depositor, &refund);
             }
 
-            events::penalty_split(&env, &depositor, penalty, fee_recipient_share, stakers_share, deposit_id);
+            events::penalty_split(&env, &depositor, penalty, fee_recipient_share, 0, deposit_id);
             events::deposit_cancelled(&env, &depositor, &entry.token, entry.amount, penalty, deposit_id);
             return Ok(());
         }
