@@ -9,7 +9,7 @@ use crate::{
     constants::{MAX_BATCH_SIZE, MAX_DEPOSIT_AMOUNT, MAX_LOCK_DURATION_SECS, MIN_LOCK_DURATION_SECS},
     errors::VaultError,
     events, storage,
-    types::{VaultEntry, LedgerVaultEntry, STORAGE_VERSION},
+    types::{LedgerVaultEntry, NotificationPreferences, VaultEntry, STORAGE_VERSION},
 };
 
 #[contract]
@@ -702,6 +702,41 @@ impl SafeHaven {
             }
         }
         results
+    }
+
+    // ----------------------------------------------------------------
+    //  Notification Preferences
+    // ----------------------------------------------------------------
+
+    /// Store `prefs` for `user`.
+    ///
+    /// `user` must sign the transaction.  Preferences are per-user and
+    /// independent of any vault; a user does not need an active deposit
+    /// to configure their preferences.
+    ///
+    /// Emits `NotificationPreferencesUpdated` after the write so off-chain
+    /// indexers can track when preferences change.
+    pub fn set_notification_preferences(
+        env: Env,
+        user: Address,
+        prefs: NotificationPreferences,
+    ) -> Result<(), VaultError> {
+        user.require_auth();
+        storage::set_notification_preferences(&env, &user, &prefs);
+        events::notification_preferences_updated(&env, &user);
+        Ok(())
+    }
+
+    /// Return the stored `NotificationPreferences` for `user`.
+    ///
+    /// Returns the all-enabled default when the user has not yet set any
+    /// preferences.  Read-only; no auth required.
+    pub fn get_notification_preferences(
+        env: Env,
+        user: Address,
+    ) -> NotificationPreferences {
+        storage::get_notification_preferences(&env, &user)
+            .unwrap_or_else(|| NotificationPreferences::default(&env))
     }
 
     // ----------------------------------------------------------------

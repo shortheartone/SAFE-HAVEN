@@ -424,3 +424,37 @@ pub fn get_storage_version(env: &Env) -> Option<u32> {
         .persistent()
         .get(&VaultKey::StorageVersion)
 }
+
+// ----------------------------------------------------------------
+//  Notification Preferences helpers
+// ----------------------------------------------------------------
+
+/// Persist `prefs` for `user` and bump TTL.
+pub fn set_notification_preferences(
+    env: &Env,
+    user: &Address,
+    prefs: &crate::types::NotificationPreferences,
+) {
+    let key = VaultKey::NotificationPreferences(user.clone());
+    env.storage().persistent().set(&key, prefs);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+/// Return the stored `NotificationPreferences` for `user`, or `None` if none have
+/// been set (callers should fall back to `NotificationPreferences::default()`).
+pub fn get_notification_preferences(
+    env: &Env,
+    user: &Address,
+) -> Option<crate::types::NotificationPreferences> {
+    let key = VaultKey::NotificationPreferences(user.clone());
+    let prefs: Option<crate::types::NotificationPreferences> =
+        env.storage().persistent().get(&key);
+    if prefs.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    }
+    prefs
+}

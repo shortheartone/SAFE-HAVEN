@@ -1952,3 +1952,371 @@ fn test_remove_depositor_o1_no_duplicate_on_redeposit() {
     assert_eq!(page.len(), 1);
     assert_eq!(page.get(0).unwrap(), alice);
 }
+
+// ================================================================
+//  Notification Preferences
+// ================================================================
+
+use crate::types::{EventType, NotificationPreferences, NotificationPriority};
+
+/// Default preferences returned when nothing has been set yet — all enabled, Low threshold.
+#[test]
+fn test_get_notification_preferences_default_all_enabled() {
+    let (_env, vault, _token, _admin, alice, _fee) = setup();
+    let prefs = vault.get_notification_preferences(&alice);
+    assert!(prefs.deposit);
+    assert!(prefs.deposit_by_ledger);
+    assert!(prefs.withdraw);
+    assert!(prefs.withdraw_to);
+    assert!(prefs.deposit_cancelled);
+    assert!(prefs.emergency_withdraw);
+    assert!(prefs.lock_extended);
+    assert!(prefs.paused);
+    assert!(prefs.admin_transfer);
+    assert!(prefs.admin_renounced);
+    assert!(prefs.contract_initialized);
+    assert_eq!(prefs.min_priority, NotificationPriority::Low);
+}
+
+/// set then get round-trips correctly.
+#[test]
+fn test_set_notification_preferences_persisted() {
+    let (_env, vault, _token, _admin, alice, _fee) = setup();
+
+    let prefs = NotificationPreferences {
+        min_priority: NotificationPriority::High,
+        deposit: true,
+        deposit_by_ledger: false,
+        withdraw: true,
+        withdraw_to: false,
+        deposit_cancelled: true,
+        emergency_withdraw: true,
+        lock_extended: false,
+        paused: false,
+        admin_transfer: false,
+        admin_renounced: true,
+        contract_initialized: false,
+    };
+
+    vault.set_notification_preferences(&alice, &prefs);
+
+    let stored = vault.get_notification_preferences(&alice);
+    assert_eq!(stored.min_priority, NotificationPriority::High);
+    assert!(stored.deposit);
+    assert!(!stored.deposit_by_ledger);
+    assert!(stored.withdraw);
+    assert!(!stored.withdraw_to);
+    assert!(stored.deposit_cancelled);
+    assert!(stored.emergency_withdraw);
+    assert!(!stored.lock_extended);
+    assert!(!stored.paused);
+    assert!(!stored.admin_transfer);
+    assert!(stored.admin_renounced);
+    assert!(!stored.contract_initialized);
+}
+
+/// Two different users can have independent preferences.
+#[test]
+fn test_notification_preferences_are_per_user() {
+    let (env, vault, _token, _admin, alice, _fee) = setup();
+    let bob: Address = Address::generate(&env);
+
+    let alice_prefs = NotificationPreferences {
+        min_priority: NotificationPriority::High,
+        deposit: false,
+        deposit_by_ledger: false,
+        withdraw: false,
+        withdraw_to: false,
+        deposit_cancelled: false,
+        emergency_withdraw: false,
+        lock_extended: false,
+        paused: false,
+        admin_transfer: false,
+        admin_renounced: false,
+        contract_initialized: false,
+    };
+
+    let bob_prefs = NotificationPreferences {
+        min_priority: NotificationPriority::Low,
+        deposit: true,
+        deposit_by_ledger: true,
+        withdraw: true,
+        withdraw_to: true,
+        deposit_cancelled: true,
+        emergency_withdraw: true,
+        lock_extended: true,
+        paused: true,
+        admin_transfer: true,
+        admin_renounced: true,
+        contract_initialized: true,
+    };
+
+    vault.set_notification_preferences(&alice, &alice_prefs);
+    vault.set_notification_preferences(&bob, &bob_prefs);
+
+    let a = vault.get_notification_preferences(&alice);
+    let b = vault.get_notification_preferences(&bob);
+
+    assert!(!a.deposit);
+    assert!(b.deposit);
+    assert_eq!(a.min_priority, NotificationPriority::High);
+    assert_eq!(b.min_priority, NotificationPriority::Low);
+}
+
+/// set_notification_preferences emits a NotificationPreferencesUpdated event.
+#[test]
+fn test_set_notification_preferences_emits_event() {
+    let (env, vault, _token, _admin, alice, _fee) = setup();
+
+    let prefs = NotificationPreferences {
+        min_priority: NotificationPriority::Low,
+        deposit: true,
+        deposit_by_ledger: true,
+        withdraw: true,
+        withdraw_to: true,
+        deposit_cancelled: true,
+        emergency_withdraw: true,
+        lock_extended: true,
+        paused: true,
+        admin_transfer: true,
+        admin_renounced: true,
+        contract_initialized: true,
+    };
+
+    vault.set_notification_preferences(&alice, &prefs);
+
+    let all_events = env.events().all();
+    // The last emitted event must originate from the vault contract.
+    let last = all_events.last().expect("at least one event must be emitted");
+    assert_eq!(last.0, vault.address);
+}
+
+/// When deposit notifications are disabled the deposit event is suppressed.
+#[test]
+fn test_deposit_event_suppressed_when_disabled() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    // Disable deposit events for alice.
+    let prefs = NotificationPreferences {
+        min_priority: NotificationPriority::Low,
+        deposit: false,   // <-- off
+        deposit_by_ledger: true,
+        withdraw: true,
+        withdraw_to: true,
+        deposit_cancelled: true,
+        emergency_withdraw: true,
+        lock_extended: true,
+        paused: true,
+        admin_transfer: true,
+        admin_renounced: true,
+        contract_initialized: true,
+    };
+    vault.set_notification_preferences(&alice, &prefs);
+
+    // Record event count before deposit.
+    let before = env.events().all().len();
+    let unlock_time = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+    let after = env.events().all().len();
+
+    // No new events should have been added (deposit event suppressed).
+    assert_eq!(
+        after, before,
+        "deposit event should be suppressed when deposit preference is off"
+    );
+}
+
+/// When deposit notifications are enabled the deposit event IS emitted.
+#[test]
+fn test_deposit_event_emitted_when_enabled() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    // Default: all enabled — no explicit set needed.
+    let before = env.events().all().len();
+    let unlock_time = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+    let after = env.events().all().len();
+
+    assert!(after > before, "deposit event should be emitted by default");
+}
+
+/// min_priority threshold suppresses events below the threshold.
+#[test]
+fn test_min_priority_critical_suppresses_high_priority_events() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    // Set min_priority to Critical — only Critical events pass.
+    let prefs = NotificationPreferences {
+        min_priority: NotificationPriority::Critical,
+        deposit: true,
+        deposit_by_ledger: true,
+        withdraw: true,
+        withdraw_to: true,
+        deposit_cancelled: true,
+        emergency_withdraw: true,
+        lock_extended: true,
+        paused: true,
+        admin_transfer: true,
+        admin_renounced: true,
+        contract_initialized: true,
+    };
+    vault.set_notification_preferences(&alice, &prefs);
+
+    // deposit is High priority — should be suppressed.
+    let before = env.events().all().len();
+    let unlock_time = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+    let after = env.events().all().len();
+
+    assert_eq!(
+        after, before,
+        "High-priority deposit event should be suppressed when min_priority=Critical"
+    );
+}
+
+/// Withdraw event is suppressed when withdraw preference is off.
+#[test]
+fn test_withdraw_event_suppressed_when_disabled() {
+    let (env, vault, token, _admin, alice, _fee) = setup();
+
+    let unlock_time = env.ledger().timestamp() + 3600;
+    vault.deposit(&alice, &token, &1_000, &unlock_time, &0);
+
+    // Disable withdraw events.
+    let prefs = NotificationPreferences {
+        min_priority: NotificationPriority::Low,
+        deposit: true,
+        deposit_by_ledger: true,
+        withdraw: false,  // <-- off
+        withdraw_to: true,
+        deposit_cancelled: true,
+        emergency_withdraw: true,
+        lock_extended: true,
+        paused: true,
+        admin_transfer: true,
+        admin_renounced: true,
+        contract_initialized: true,
+    };
+    vault.set_notification_preferences(&alice, &prefs);
+
+    advance_time(&env, 3601);
+    let before = env.events().all().len();
+    vault.withdraw(&alice, &0);
+    let after = env.events().all().len();
+
+    assert_eq!(
+        after, before,
+        "withdraw event should be suppressed when withdraw preference is off"
+    );
+}
+
+/// allows() method: disabled event type returns false regardless of priority.
+#[test]
+fn test_allows_disabled_event_returns_false() {
+    let _env = Env::default();
+    let prefs = NotificationPreferences {
+        min_priority: NotificationPriority::Low,
+        deposit: false,
+        deposit_by_ledger: true,
+        withdraw: true,
+        withdraw_to: true,
+        deposit_cancelled: true,
+        emergency_withdraw: true,
+        lock_extended: true,
+        paused: true,
+        admin_transfer: true,
+        admin_renounced: true,
+        contract_initialized: true,
+    };
+    assert!(!prefs.allows(&EventType::Deposit));
+    assert!(prefs.allows(&EventType::Withdraw));
+}
+
+/// allows() method: priority below threshold returns false even when event is enabled.
+#[test]
+fn test_allows_priority_below_threshold_returns_false() {
+    let _env = Env::default();
+    // ContractInitialized is Low priority.
+    let prefs = NotificationPreferences {
+        min_priority: NotificationPriority::High,
+        deposit: true,
+        deposit_by_ledger: true,
+        withdraw: true,
+        withdraw_to: true,
+        deposit_cancelled: true,
+        emergency_withdraw: true,
+        lock_extended: true,
+        paused: true,
+        admin_transfer: true,
+        admin_renounced: true,
+        contract_initialized: true, // enabled, but Low priority < High threshold
+    };
+    assert!(!prefs.allows(&EventType::ContractInitialized));
+}
+
+/// allows() method: Critical events always pass when enabled.
+#[test]
+fn test_allows_critical_event_passes_all_thresholds() {
+    let _env = Env::default();
+    let prefs = NotificationPreferences {
+        min_priority: NotificationPriority::Critical,
+        deposit: true,
+        deposit_by_ledger: true,
+        withdraw: true,
+        withdraw_to: true,
+        deposit_cancelled: true,
+        emergency_withdraw: true,
+        lock_extended: true,
+        paused: true,
+        admin_transfer: true,
+        admin_renounced: true,
+        contract_initialized: true,
+    };
+    // EmergencyWithdraw and AdminRenounced are Critical.
+    assert!(prefs.allows(&EventType::EmergencyWithdraw));
+    assert!(prefs.allows(&EventType::AdminRenounced));
+    // Deposit is High — blocked at Critical threshold.
+    assert!(!prefs.allows(&EventType::Deposit));
+}
+
+/// Updating preferences is idempotent — set twice, last write wins.
+#[test]
+fn test_set_notification_preferences_overwrites_previous() {
+    let (_env, vault, _token, _admin, alice, _fee) = setup();
+
+    let prefs1 = NotificationPreferences {
+        min_priority: NotificationPriority::Low,
+        deposit: true,
+        deposit_by_ledger: true,
+        withdraw: true,
+        withdraw_to: true,
+        deposit_cancelled: true,
+        emergency_withdraw: true,
+        lock_extended: true,
+        paused: true,
+        admin_transfer: true,
+        admin_renounced: true,
+        contract_initialized: true,
+    };
+    let prefs2 = NotificationPreferences {
+        min_priority: NotificationPriority::Medium,
+        deposit: false,
+        deposit_by_ledger: false,
+        withdraw: false,
+        withdraw_to: false,
+        deposit_cancelled: false,
+        emergency_withdraw: false,
+        lock_extended: false,
+        paused: false,
+        admin_transfer: false,
+        admin_renounced: false,
+        contract_initialized: false,
+    };
+
+    vault.set_notification_preferences(&alice, &prefs1);
+    vault.set_notification_preferences(&alice, &prefs2);
+
+    let stored = vault.get_notification_preferences(&alice);
+    assert!(!stored.deposit);
+    assert_eq!(stored.min_priority, NotificationPriority::Medium);
+}
