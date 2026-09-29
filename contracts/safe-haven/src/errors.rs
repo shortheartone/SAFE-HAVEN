@@ -45,4 +45,7 @@ pub enum VaultError {
     InvalidSponsorshipConfig = 26,
     /// Batch size exceeds MAX_BATCH_SIZE
     BatchSizeExceeded = 27,
+    BeneficiaryNotSet = 28,
+    BeneficiaryClaimTooEarly = 29,
+    InvalidBeneficiary = 30,
 }

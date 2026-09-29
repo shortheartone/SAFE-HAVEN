@@ -26,6 +26,13 @@ pub struct DepositRequest {
     pub penalty_bps: u32,
 }
 
+    #[contracttype]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct Beneficiary {
+        pub address: Address,
+        pub activation_delay_secs: u64,
+    }
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VaultKey {
@@ -89,6 +96,8 @@ pub enum VaultKey {
     StakerRewardsClaimed(Address),
     /// NFT evolution record: maps (depositor, deposit_id) to NFTEvolutionRecord
     NFTEvolution(Address, u32),
+    Beneficiary(Address),
+    LastActivity(Address),
 }
 
 #[contracttype]

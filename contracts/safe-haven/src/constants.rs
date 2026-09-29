@@ -13,6 +13,9 @@ pub const MAX_LOCK_DURATION_SECS: u64 = 157_788_000;
 /// Minimum lock duration: prevent trivial, pointless vaults that waste storage.
 pub const MIN_LOCK_DURATION_SECS: u64 = 60;
 
+/// Required depositor inactivity before a designated beneficiary can claim funds.
+pub const BENEFICIARY_WAIT_PERIOD_SECS: u64 = 365 * 24 * 60 * 60;
+
 /// Minimum number of ledgers required for a ledger-based deposit.
 pub const MIN_LOCK_LEDGERS: u32 = (MIN_LOCK_DURATION_SECS / LEDGER_SECONDS) as u32;
 
