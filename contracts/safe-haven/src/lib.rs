@@ -27,13 +27,13 @@ mod prediction_market_storage;
 mod prediction_market_types;
 
 pub use constants::{
-    EPOCH_SIZE_LEDGERS, MAX_BATCH_SIZE, MAX_DEPOSIT_AMOUNT, MAX_LOCK_DURATION_SECS,
-    MIN_LOCK_DURATION_SECS, WITHDRAWAL_LIMIT_PER_EPOCH,
+    BENEFICIARY_WAIT_PERIOD_SECS, EPOCH_SIZE_LEDGERS, MAX_BATCH_SIZE, MAX_DEPOSIT_AMOUNT,
+    MAX_LOCK_DURATION_SECS, MIN_LOCK_DURATION_SECS, WITHDRAWAL_LIMIT_PER_EPOCH,
 };
 
 pub use types::{
-    CircuitBreakerActivation, DepositSubscription, DepositType, MultiTokenVaultEntry, Page,
-    SubscriptionExecution, SubscriptionStats, TaxLossHarvest, TokenDeposit, STORAGE_VERSION,
+    Beneficiary, CircuitBreakerActivation, DepositSubscription, DepositType, MultiTokenVaultEntry,
+    Page, SubscriptionExecution, SubscriptionStats, TaxLossHarvest, TokenDeposit, STORAGE_VERSION,
     MAX_EMERGENCY_WITHDRAWAL_PER_LEDGER, MAX_TOKENS_PER_DEPOSIT, BatchWithdrawalResult,
     WithdrawalResult,
 };

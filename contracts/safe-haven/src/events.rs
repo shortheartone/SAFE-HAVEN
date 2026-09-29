@@ -2,6 +2,20 @@ use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 use crate::types::LoyaltyTier;
 
+pub fn beneficiary_designated(env: &Env, depositor: &Address, beneficiary: Option<Address>) {
+    let topics = (Symbol::new(env, "BeneficiaryDesignated"), depositor.clone());
+    env.events().publish(topics, beneficiary);
+}
+
+pub fn beneficiary_claim(env: &Env, depositor: &Address, beneficiary: &Address, deposit_count: u32) {
+    let topics = (
+        Symbol::new(env, "BeneficiaryClaim"),
+        depositor.clone(),
+        beneficiary.clone(),
+    );
+    env.events().publish(topics, deposit_count);
+}
+
 pub fn contract_initialized(
     env: &Env,
     admin: &Address,

@@ -1,6 +1,6 @@
 use soroban_sdk::{token, Address, Bytes, Env, Vec};
 
-use crate::types::{DepositSubscription, MultiTokenVaultEntry, SubscriptionExecution, SubscriptionStats, TaxLossHarvest, VaultEntry, VaultKey, LedgerVaultEntry, MAX_LOCK_DURATION_SECS};
+use crate::types::{Beneficiary, DepositSubscription, MultiTokenVaultEntry, SubscriptionExecution, SubscriptionStats, TaxLossHarvest, VaultEntry, VaultKey, LedgerVaultEntry, MAX_LOCK_DURATION_SECS};
 use crate::types::CircuitBreakerActivation;
 
 // ================================================================
@@ -140,9 +140,60 @@ fn save_active_ids(env: &Env, depositor: &Address, ids: &Vec<u32>) {
 /// Append `deposit_id` to the active ID list for `depositor`. Called
 /// immediately after a new deposit entry is written to storage.
 pub fn add_active_deposit_id(env: &Env, depositor: &Address, deposit_id: u32) {
+    initialize_last_activity(env, depositor);
     let mut ids = get_active_ids(env, depositor);
     ids.push_back(deposit_id);
     save_active_ids(env, depositor, &ids);
+}
+
+fn initialize_last_activity(env: &Env, depositor: &Address) {
+    let key = VaultKey::LastActivity(depositor.clone());
+    if !env.storage().persistent().has(&key) {
+        env.storage().persistent().set(&key, &env.ledger().timestamp());
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+    }
+}
+
+pub fn record_depositor_activity(env: &Env, depositor: &Address) {
+    let key = VaultKey::LastActivity(depositor.clone());
+    env.storage().persistent().set(&key, &env.ledger().timestamp());
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+pub fn get_last_activity(env: &Env, depositor: &Address) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&VaultKey::LastActivity(depositor.clone()))
+}
+
+pub fn remove_last_activity(env: &Env, depositor: &Address) {
+    env.storage()
+        .persistent()
+        .remove(&VaultKey::LastActivity(depositor.clone()));
+}
+
+pub fn set_beneficiary(env: &Env, depositor: &Address, beneficiary: &Beneficiary) {
+    let key = VaultKey::Beneficiary(depositor.clone());
+    env.storage().persistent().set(&key, beneficiary);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TARGET);
+}
+
+pub fn get_beneficiary(env: &Env, depositor: &Address) -> Option<Beneficiary> {
+    env.storage()
+        .persistent()
+        .get(&VaultKey::Beneficiary(depositor.clone()))
+}
+
+pub fn remove_beneficiary(env: &Env, depositor: &Address) {
+    env.storage()
+        .persistent()
+        .remove(&VaultKey::Beneficiary(depositor.clone()));
 }
 
 /// Remove `deposit_id` from the active ID list for `depositor`. Called

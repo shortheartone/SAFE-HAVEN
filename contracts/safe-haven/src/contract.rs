@@ -9,11 +9,12 @@ use crate::{
     constants::{
         MAX_BATCH_SIZE, MAX_DEPOSIT_AMOUNT, MAX_LOCK_DURATION_SECS, MIN_LOCK_DURATION_SECS,
         MIN_LOCK_LEDGERS, STAKER_PENALTY_BPS, FEE_RECIPIENT_PENALTY_BPS,
+        BENEFICIARY_WAIT_PERIOD_SECS,
     },
     errors::VaultError,
     events, storage, constants,
     types::{
-        DepositType, MultiTokenVaultEntry, TokenDeposit, VaultEntry, LedgerVaultEntry, Page,
+        Beneficiary, DepositType, MultiTokenVaultEntry, TokenDeposit, VaultEntry, LedgerVaultEntry, Page,
         STORAGE_VERSION, MAX_TOKENS_PER_DEPOSIT, MEVCommitment, MEVDetection, MEVStatus,
         PriceSample, SustainabilityMetrics, BatchWithdrawalResult, WithdrawalResult,
     },
@@ -157,8 +158,126 @@ fn check_tax_wash_sale(
     Ok(())
 }
 
+fn require_depositor_activity(env: &Env, depositor: &Address) {
+    depositor.require_auth();
+    storage::record_depositor_activity(env, depositor);
+}
+
 #[contractimpl]
 impl SafeHaven {
+    pub fn set_beneficiary(
+        env: Env,
+        depositor: Address,
+        beneficiary: Option<Address>,
+    ) -> Result<(), VaultError> {
+        depositor.require_auth();
+        if beneficiary.as_ref() == Some(&depositor) {
+            return Err(VaultError::InvalidBeneficiary);
+        }
+
+        storage::record_depositor_activity(&env, &depositor);
+        if let Some(address) = beneficiary.clone() {
+            storage::set_beneficiary(
+                &env,
+                &depositor,
+                &Beneficiary {
+                    address,
+                    activation_delay_secs: BENEFICIARY_WAIT_PERIOD_SECS,
+                },
+            );
+        } else {
+            storage::remove_beneficiary(&env, &depositor);
+        }
+        events::beneficiary_designated(&env, &depositor, beneficiary);
+        Ok(())
+    }
+
+    pub fn get_beneficiary(env: Env, depositor: Address) -> Option<Beneficiary> {
+        storage::get_beneficiary(&env, &depositor)
+    }
+
+    pub fn claim_as_beneficiary(
+        env: Env,
+        beneficiary: Address,
+        depositor: Address,
+    ) -> Result<(), VaultError> {
+        beneficiary.require_auth();
+        let designation =
+            storage::get_beneficiary(&env, &depositor).ok_or(VaultError::BeneficiaryNotSet)?;
+        if designation.address != beneficiary {
+            return Err(VaultError::Unauthorized);
+        }
+
+        let now = env.ledger().timestamp();
+        let last_activity = storage::get_last_activity(&env, &depositor).unwrap_or(now);
+        let claim_at = last_activity.saturating_add(designation.activation_delay_secs);
+        if now < claim_at {
+            return Err(VaultError::BeneficiaryClaimTooEarly);
+        }
+
+        let deposit_ids = storage::get_deposit_ids(&env, &depositor);
+        if deposit_ids.len() == 0 {
+            return Err(VaultError::NoDepositFound);
+        }
+
+        let contract = env.current_contract_address();
+        let deposit_count = deposit_ids.len();
+        for deposit_id in deposit_ids.iter() {
+            if let Some(mut entry) = storage::get_deposit_readonly(&env, &depositor, deposit_id) {
+                entry.amount = compute_accrued_amount(
+                    entry.amount,
+                    entry.compound_frequency_secs,
+                    entry.last_accrual_timestamp,
+                    now,
+                );
+                storage::remove_deposit(&env, &depositor, deposit_id);
+                token::Client::new(&env, &entry.token).transfer(
+                    &contract,
+                    &beneficiary,
+                    &entry.amount,
+                );
+            } else if let Some(entry) =
+                storage::get_deposit_by_ledger_readonly(&env, &depositor, deposit_id)
+            {
+                storage::remove_deposit_by_ledger(&env, &depositor, deposit_id);
+                token::Client::new(&env, &entry.token).transfer(
+                    &contract,
+                    &beneficiary,
+                    &entry.amount,
+                );
+            } else if let Some(entry) =
+                storage::get_multi_deposit_readonly(&env, &depositor, deposit_id)
+            {
+                storage::remove_multi_deposit(&env, &depositor, deposit_id);
+                for token_deposit in entry.tokens.iter() {
+                    let amount = compute_accrued_amount(
+                        token_deposit.amount,
+                        entry.compound_frequency_secs,
+                        entry.last_accrual_timestamp,
+                        now,
+                    );
+                    token::Client::new(&env, &token_deposit.token).transfer(
+                        &contract,
+                        &beneficiary,
+                        &amount,
+                    );
+                }
+            } else {
+                return Err(VaultError::NoDepositFound);
+            }
+
+            storage::remove_withdrawal_whitelist(&env, &depositor, deposit_id);
+            storage::remove_nft_evolution(&env, &depositor, deposit_id);
+            storage::remove_sustainability_metrics(&env, &depositor, deposit_id);
+        }
+
+        storage::remove_depositor(&env, &depositor);
+        storage::remove_beneficiary(&env, &depositor);
+        storage::remove_last_activity(&env, &depositor);
+        events::beneficiary_claim(&env, &depositor, &beneficiary, deposit_count);
+        Ok(())
+    }
+
     pub fn propose_upgrade(
         env: Env, proposer: Address, old_version: soroban_sdk::String,
         new_version: soroban_sdk::String, diff_url: soroban_sdk::String,
@@ -542,7 +661,7 @@ impl SafeHaven {
         encrypted_metadata: Bytes,
         signature: Bytes,
     ) -> Result<u32, VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
         let public_key = storage::get_quantum_safe_public_key(&env, &depositor)
             .ok_or(VaultError::InvalidQuantumSafeKey)?;
         if !pq::has_valid_lengths(&public_key, &signature) {
@@ -591,7 +710,7 @@ impl SafeHaven {
         unlock_time: u64,
         penalty_bps: u32,
     ) -> Result<u32, VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
         storage::require_permission(&env, &depositor, PermissionType::Deposit)?;
 
         if storage::is_paused(&env) {
@@ -712,7 +831,7 @@ impl SafeHaven {
         depositor: Address,
         deposits: Vec<DepositRequest>,
     ) -> Result<Vec<u32>, VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
         storage::require_permission(&env, &depositor, PermissionType::Deposit)?;
 
         if deposits.len() > MAX_BATCH_SIZE {
@@ -911,7 +1030,7 @@ impl SafeHaven {
         penalty_bps: u32,
         withdrawal_delay_secs: u64,
     ) -> Result<u32, VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
         storage::require_permission(&env, &depositor, PermissionType::Deposit)?;
 
         if storage::is_paused(&env) {
@@ -979,7 +1098,7 @@ impl SafeHaven {
         unlock_ledger: u32,
         penalty_bps: u32,
     ) -> Result<u32, VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
         storage::require_permission(&env, &depositor, PermissionType::Deposit)?;
 
         if storage::is_paused(&env) {
@@ -1092,7 +1211,7 @@ impl SafeHaven {
         unlock_time: u64,
         penalty_bps: u32,
     ) -> Result<u32, VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
         storage::require_permission(&env, &depositor, PermissionType::Deposit)?;
 
         if storage::is_paused(&env) {
@@ -1195,7 +1314,7 @@ impl SafeHaven {
         deposit_id: u32,
         addresses: Vec<Address>,
     ) -> Result<(), VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         // Verify the deposit exists (timestamp-based, ledger-based, or multi-token).
         let deposit_exists =
@@ -1237,7 +1356,7 @@ impl SafeHaven {
         credential_commitment: soroban_sdk::BytesN<32>,
         verifier: Address,
     ) -> Result<(), VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
         verifier.require_auth();
 
         let did_bytes = did.to_bytes();
@@ -1316,7 +1435,7 @@ impl SafeHaven {
         penalty_bps: u32,
         compound_frequency_secs: u64,
     ) -> Result<u32, VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         if storage::is_paused(&env) {
             return Err(VaultError::ContractPaused);
@@ -1452,7 +1571,7 @@ impl SafeHaven {
     // ----------------------------------------------------------------
 
     pub fn cancel_deposit(env: Env, depositor: Address, deposit_id: u32) -> Result<(), VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         // Try timestamp-based deposit first (accrue interest before calculating refund).
         if let Some(mut entry) = storage::get_deposit(&env, &depositor, deposit_id) {
@@ -1686,7 +1805,7 @@ impl SafeHaven {
         deposit_id: u32,
         commit_hash: soroban_sdk::BytesN<32>,
     ) -> Result<(), VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         // Verify deposit exists
         if storage::get_deposit_readonly(&env, &depositor, deposit_id).is_none() {
@@ -1720,7 +1839,7 @@ impl SafeHaven {
         price: i128,
         nonce: u32,
     ) -> Result<(), VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         // Get the commitment
         let commitment = storage::get_mev_commitment(&env, &depositor, deposit_id)
@@ -1762,7 +1881,7 @@ impl SafeHaven {
 
     /// Claim MEV recovered for a depositor from the MEV pool.
     pub fn claim_mev_recovery(env: Env, depositor: Address) -> Result<i128, VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         let mev_recovered = storage::get_mev_claimed(&env, &depositor);
         if mev_recovered <= 0 {
@@ -1846,7 +1965,7 @@ impl SafeHaven {
     // ----------------------------------------------------------------
 
     pub fn withdraw(env: Env, depositor: Address, deposit_id: u32) -> Result<(), VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         if storage::is_emergency_lockdown(&env) {
             return Err(VaultError::EmergencyLockdown);
@@ -1960,7 +2079,7 @@ impl SafeHaven {
         tax_rate_bps: u32,
         wash_sale_period_secs: u64,
     ) -> Result<TaxLossHarvest, VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         if current_value <= 0 || replacement_amount <= 0 || tax_rate_bps > 10_000 {
             return Err(VaultError::InvalidTaxLossHarvest);
@@ -2060,7 +2179,7 @@ impl SafeHaven {
         deposit_id: u32,
         recipient: Address,
     ) -> Result<(), VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         if storage::is_emergency_lockdown(&env) {
             return Err(VaultError::EmergencyLockdown);
@@ -2204,7 +2323,7 @@ impl SafeHaven {
         depositor: Address,
         deposit_ids: Vec<u32>,
     ) -> Result<BatchWithdrawalResult, VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         if storage::is_emergency_lockdown(&env) {
             return Err(VaultError::EmergencyLockdown);
@@ -2493,7 +2612,7 @@ impl SafeHaven {
         unlock_time: u64,
         penalty_bps: u32,
     ) -> Result<(), VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         // Verify the deposit is NOT in active storage
         if storage::get_deposit_readonly(&env, &depositor, deposit_id).is_some() {
@@ -2552,7 +2671,7 @@ impl SafeHaven {
         unlock_ledger: u32,
         penalty_bps: u32,
     ) -> Result<(), VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         // Verify the deposit is NOT in active storage
         if storage::get_deposit_readonly(&env, &depositor, deposit_id).is_some() {
@@ -2602,7 +2721,7 @@ impl SafeHaven {
         depositor: Address,
         deposit_id: u32,
     ) -> Result<(), VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         let now = env.ledger().timestamp();
 
@@ -3243,7 +3362,7 @@ impl SafeHaven {
     }
 
     pub fn claim_flash_loan_fees(env: Env, depositor: Address, token: Address) -> Result<i128, VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
         let fee = storage::get_flash_loan_fee_balance(&env, &token, &depositor);
         if fee <= 0 {
             return Ok(0);
@@ -3453,7 +3572,7 @@ impl SafeHaven {
         lock_duration_secs: u64,
         penalty_bps: u32,
     ) -> Result<u32, VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         if storage::is_paused(&env) {
             return Err(VaultError::ContractPaused);
@@ -3548,7 +3667,7 @@ impl SafeHaven {
         depositor: Address,
         sub_id: u32,
     ) -> Result<(), VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
 
         let mut sub = storage::get_subscription(&env, &depositor, sub_id)
             .ok_or(VaultError::NoSubscriptionFound)?;
@@ -3661,7 +3780,7 @@ impl SafeHaven {
     }
 
     pub fn pause_subscription(env: Env, depositor: Address, sub_id: u32) -> Result<(), VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
         let mut sub = storage::get_subscription(&env, &depositor, sub_id).ok_or(VaultError::NoSubscriptionFound)?;
         if sub.cancelled { return Err(VaultError::SubscriptionCancelled); }
         if sub.executed_count >= sub.total_count { return Err(VaultError::SubscriptionCompleted); }
@@ -3673,7 +3792,7 @@ impl SafeHaven {
     }
 
     pub fn resume_subscription(env: Env, depositor: Address, sub_id: u32) -> Result<(), VaultError> {
-        depositor.require_auth();
+        require_depositor_activity(&env, &depositor);
         let mut sub = storage::get_subscription(&env, &depositor, sub_id).ok_or(VaultError::NoSubscriptionFound)?;
         if sub.cancelled { return Err(VaultError::SubscriptionCancelled); }
         if sub.executed_count >= sub.total_count { return Err(VaultError::SubscriptionCompleted); }
