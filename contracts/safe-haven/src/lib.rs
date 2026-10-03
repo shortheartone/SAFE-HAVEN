@@ -17,6 +17,7 @@ mod events;
 mod nft;
 mod pq;
 mod storage;
+mod stress_test;
 mod types;
 
 // Prediction Market modules
@@ -38,6 +39,14 @@ pub use types::{
     WithdrawalResult,
 };
 pub use pq::{ML_DSA_PUBLIC_KEY_BYTES, ML_DSA_SIGNATURE_BYTES};
+
+pub use stress_test::{
+    StressScenario, DepositImpact, StressTestResult, StressRecommendation, RiskLevel,
+    PortfolioStressReport, calculate_deposit_impact, calculate_worst_case_loss,
+    classify_risk_level, generate_recommendation, run_stress_test,
+    export_stress_report_summary, format_scenario_result, calculate_portfolio_metrics,
+    requires_immediate_action,
+};
 
 pub use contract::SafeHaven;
 pub use contract::SafeHavenClient;
