@@ -251,7 +251,7 @@ jobs:
           fi
 
       - name: Upload optimized WASM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: safe-haven-wasm
           path: target/safe_haven.optimized.wasm
@@ -347,7 +347,7 @@ jobs:
 
       - name: Upload deploy log artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: deploy-log
           path: deploy_testnet.log
