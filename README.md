@@ -45,7 +45,17 @@ SAFE-HAVEN/
 
 ---
 
-## Quick Start
+## MEV Commit Hash
+
+The protocol includes a MEV (Maximal Extractable Value) commit hash mechanism to prevent transaction ordering manipulation. The hash combines deposit parameters (token, amount, price, nonce) using the Keccak256 algorithm with big-endian encoding.
+
+See [MEV_SPEC.md](./MEV_SPEC.md) for:
+- Complete hash format specification
+- Encoding details and examples
+- TypeScript and Rust implementations
+- Cross-language test vectors
+
+---
 
 ### Smart Contract
 
