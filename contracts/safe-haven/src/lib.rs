@@ -14,8 +14,8 @@ mod constants;
 mod contract;
 mod errors;
 mod events;
-mod nft;
-mod pq;
+mod mev_detection;
+mod mev_integration;
 mod storage;
 mod types;
 

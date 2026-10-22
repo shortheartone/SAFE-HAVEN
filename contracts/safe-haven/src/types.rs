@@ -113,6 +113,8 @@ pub enum VaultKey {
     RewardsPool,
     /// Rewards claimed by a staker (track cumulative for auditing)
     StakerRewardsClaimed(Address),
+    /// Price samples for MEV detection (TWAP calculation)
+    PriceSamples(Address),
     /// Insurance claim entry (issue #334)
     InsuranceClaim(u32),
     /// Counter for insurance claim IDs (issue #334)
