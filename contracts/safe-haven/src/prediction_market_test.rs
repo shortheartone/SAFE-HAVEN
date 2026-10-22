@@ -13,23 +13,18 @@
 
 #[cfg(test)]
 mod prediction_market_tests {
-    use soroban_sdk::{
-        testutils::{Address as _, Ledger},
-        token::{Client as TokenClient, StellarAssetClient},
-        Address, Env, String, Vec,
-        testutils::Address as _,
-        token::StellarAssetClient,
-        Address, Env, String, Vec,
     extern crate std;
+
     use soroban_sdk::{
         testutils::{Address as _, Ledger, LedgerInfo},
-        token::{StellarAssetClient, Client as TokenClient},
-        Address, Env, String as SorobanString, Vec as SorobanVec,
+        token::{Client as TokenClient, StellarAssetClient},
+        Address, Env, String, Vec,
     };
 
     use crate::{
         contract::{SafeHaven, SafeHavenClient},
         prediction_market_errors::PredictionMarketError,
+        prediction_market,
         prediction_market_storage as storage,
         prediction_market_types::*,
         prediction_market_storage,
@@ -68,6 +63,8 @@ mod prediction_market_tests {
         });
 
         (env, contract, bettor, token, market_id, close_time)
+    }
+
     fn setup_market_with_bettor() -> (Env, Address, Address, Address, u32) {
         let env = Env::default();
         env.mock_all_auths();
@@ -194,6 +191,53 @@ mod prediction_market_tests {
             let market = storage::get_market_readonly(&env, market_id).unwrap();
             assert_eq!(market.total_pool, 1);
             assert_eq!(market.bettor_count, 1);
+        });
+    }
+
+    #[test]
+    fn test_claim_winnings_prevents_double_claim() {
+        let (env, contract, bettor, token, market_id, _) = betting_fixture();
+        StellarAssetClient::new(&env, &token).mint(&bettor, &100);
+        TokenClient::new(&env, &token).approve(
+            &bettor,
+            &contract,
+            &100,
+            &env.ledger().sequence().saturating_add(100),
+        );
+
+        env.as_contract(&contract, || {
+            prediction_market::place_bet(
+                &env,
+                bettor.clone(),
+                market_id,
+                0,
+                100,
+                token.clone(),
+            )
+            .unwrap();
+
+            let mut market = storage::get_market(&env, market_id).unwrap();
+            market.status = MarketStatus::Resolved;
+            market.winning_outcome = Some(0);
+            storage::set_market(&env, &market);
+
+            assert_eq!(
+                prediction_market::claim_winnings(
+                    &env,
+                    bettor.clone(),
+                    market_id,
+                    0,
+                    token.clone(),
+                ),
+                Ok(100)
+            );
+            assert!(storage::get_bet_readonly(&env, market_id, 0, &bettor)
+                .unwrap()
+                .claimed);
+            assert_eq!(
+                prediction_market::claim_winnings(&env, bettor, market_id, 0, token),
+                Err(PredictionMarketError::BetsAlreadyClaimed)
+            );
         });
     }
 
@@ -496,17 +540,6 @@ mod prediction_market_tests {
         // Expected: InvalidResolutionTime error
         assert_eq!(true, true);
     }
-
-    use soroban_sdk::{
-        testutils::{Address as _, Ledger, LedgerInfo},
-        token::StellarAssetClient,
-        Address, Env, String, Vec,
-    };
-
-    use crate::{
-        contract::{SafeHaven, SafeHavenClient},
-        prediction_market_types::MarketStatus,
-    };
 
     // ----------------------------------------------------------------
     //  Test helpers
