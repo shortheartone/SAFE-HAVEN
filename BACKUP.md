@@ -36,3 +36,24 @@ Run the command from the repository root with cron. Use an absolute path and red
 ```
 
 Review the resulting IPFS CID or cloud object, monitor failed runs, and periodically test that a snapshot can be downloaded and parsed with `jq`.
+
+## Encryption at Rest
+
+Sensitive fields (for example social security numbers and credit card data) are encrypted at the field level before they are persisted, so a raw database dump or backup snapshot never contains them in plaintext. The application decrypts them on read and re-encrypts on write; encrypted values cannot be read directly from the database.
+
+### Key Management
+
+- The encryption key is supplied to the application through the `ENCRYPTION_KEY` environment variable and is never committed to the repository or written into backups.
+- Store the key in a secrets manager (or the deployment platform's secret store) and inject it at runtime; restrict access to the application service only.
+- Backups contain only ciphertext. To restore and use encrypted fields, the same key must be available to the restoring application; without it the encrypted columns remain unreadable.
+- Key rotation is out of scope for this change; when rotating, re-encrypt existing values with the new key before retiring the old one.
+
+### Search on Encrypted Fields
+
+Exact-match lookups on encrypted fields use a deterministic blind index (a keyed hash of the normalized value) stored alongside the ciphertext, so search continues to work without exposing plaintext. Range or partial-match queries are not supported on encrypted fields.
+
+### Backup / Restore with Encryption
+
+1. Take a snapshot as described above; encrypted fields appear only as ciphertext plus their blind index.
+2. Restore the snapshot into a database and start the application with the same `ENCRYPTION_KEY`.
+3. Verify that the application can decrypt and display the sensitive fields and that exact-match search returns the expected records.
