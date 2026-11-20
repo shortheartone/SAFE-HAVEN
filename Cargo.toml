@@ -1,11 +1,15 @@
 [workspace]
 members = [
     "contracts/safe-haven",
+    "services/shared",
+    "services/discovery",
 ]
 resolver = "2"
 
 [workspace.dependencies]
 soroban-sdk = { version = "22.0.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [profile.release]
 opt-level = "z"
