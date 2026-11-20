@@ -1218,6 +1218,7 @@ fn test_session_key_deposit_is_scoped_and_expires() {
     let expires_at = env.ledger().timestamp() + 600;
     vault.authorize_session_key(&wallet, &session_key, &expires_at);
     assert!(vault.is_session_key_authorized(&wallet, &session_key));
+    assert!(!vault.is_session_key_authorized(&Address::generate(&env), &session_key));
 
     let unlock_time = env.ledger().timestamp() + 3600;
     let id = vault.deposit_with_session_key(
@@ -1259,6 +1260,19 @@ fn test_session_key_deposit_is_scoped_and_expires() {
             &0,
         ),
         Err(Ok(VaultError::SessionKeyNotAuthorized))
+    );
+}
+
+#[test]
+fn test_session_key_rejects_non_future_expiry() {
+    let (env, vault, _token, _admin, _alice, _fee) = setup();
+    let wallet = Address::generate(&env);
+    let session_key = Address::generate(&env);
+    let now = env.ledger().timestamp();
+
+    assert_eq!(
+        vault.try_authorize_session_key(&wallet, &session_key, &now),
+        Err(Ok(VaultError::InvalidSessionKeyExpiry))
     );
 }
 
@@ -7964,7 +7978,7 @@ fn test_session_key_revoke_success() {
 
     // Now revoke it
     vault
-        .revoke_session_key(&alice, &key_id)
+        .revoke_session_key_by_id(&alice, &key_id)
         .expect("revoke_session_key should succeed");
 }
 
@@ -7972,7 +7986,7 @@ fn test_session_key_revoke_success() {
 fn test_session_key_revoke_not_found() {
     let (env, vault, token, _admin, alice, _fee) = setup();
 
-    let result = vault.revoke_session_key(&alice, &999);
+    let result = vault.revoke_session_key_by_id(&alice, &999);
 
     assert_eq!(result, Err(VaultError::SessionKeyNotFound));
 }
@@ -7992,11 +8006,11 @@ fn test_session_key_revoke_already_revoked() {
 
     // Revoke once
     vault
-        .revoke_session_key(&alice, &key_id)
+        .revoke_session_key_by_id(&alice, &key_id)
         .expect("revoke_session_key first time");
 
     // Try to revoke again - should fail
-    let result = vault.revoke_session_key(&alice, &key_id);
+    let result = vault.revoke_session_key_by_id(&alice, &key_id);
 
     assert_eq!(result, Err(VaultError::SessionKeyRevoked));
 }
@@ -8020,12 +8034,12 @@ fn test_session_key_deposit_after_revoke_fails() {
 
     // Revoke the key
     vault
-        .revoke_session_key(&alice, &key_id)
+        .revoke_session_key_by_id(&alice, &key_id)
         .expect("revoke_session_key");
 
     // Try to deposit using the revoked key - should fail
     let unlock_time = now + 500;
-    let result = vault.deposit_with_session_key(
+    let result = vault.deposit_with_session_key_by_id(
         &bob,
         &key_id,
         &alice,
@@ -8053,7 +8067,7 @@ fn test_session_key_revoke_before_expiry() {
 
     // Revoke key that hasn't expired yet
     vault
-        .revoke_session_key(&alice, &key_id)
+        .revoke_session_key_by_id(&alice, &key_id)
         .expect("revoke_session_key should work even before expiry");
 }
 
@@ -8075,7 +8089,7 @@ fn test_session_key_revoke_is_permanent() {
 
     // Revoke the key
     vault
-        .revoke_session_key(&alice, &key_id)
+        .revoke_session_key_by_id(&alice, &key_id)
         .expect("revoke_session_key");
 
     // Move time forward to near expiry
@@ -8083,7 +8097,7 @@ fn test_session_key_revoke_is_permanent() {
 
     // Try to deposit again - should still fail (even though time moved)
     let unlock_time = now + 500;
-    let result = vault.deposit_with_session_key(
+    let result = vault.deposit_with_session_key_by_id(
         &bob,
         &key_id,
         &alice,
@@ -8115,7 +8129,7 @@ fn test_session_key_deposit_success() {
     // Bob (delegate) makes a deposit on behalf of alice
     let unlock_time = now + 500;
     let deposit_id = vault
-        .deposit_with_session_key(&bob, &key_id, &alice, &token, &1_000, &unlock_time, &0)
+        .deposit_with_session_key_by_id(&bob, &key_id, &alice, &token, &1_000, &unlock_time, &0)
         .expect("deposit_with_session_key should succeed");
 
     assert_eq!(deposit_id, 0, "First deposit should have ID 0");
@@ -8150,12 +8164,12 @@ fn test_session_key_non_revoked_keys_still_work() {
 
     // Revoke the first key
     vault
-        .revoke_session_key(&alice, &key_id_1)
+        .revoke_session_key_by_id(&alice, &key_id_1)
         .expect("revoke key 1");
 
     // Key 1 should fail
     let unlock_time = now + 500;
-    let result1 = vault.deposit_with_session_key(
+    let result1 = vault.deposit_with_session_key_by_id(
         &bob,
         &key_id_1,
         &alice,
@@ -8167,7 +8181,7 @@ fn test_session_key_non_revoked_keys_still_work() {
     assert_eq!(result1, Err(VaultError::SessionKeyRevoked));
 
     // Key 2 should still work
-    let result2 = vault.deposit_with_session_key(
+    let result2 = vault.deposit_with_session_key_by_id(
         &charlie,
         &key_id_2,
         &alice,
@@ -8203,7 +8217,7 @@ fn test_session_key_revoke_with_multiple_keys() {
 
     // Revoke only key_id_2
     vault
-        .revoke_session_key(&alice, &key_id_2)
+        .revoke_session_key_by_id(&alice, &key_id_2)
         .expect("revoke key 2");
 
     // Keys 1 and 3 should still be usable
@@ -8212,16 +8226,16 @@ fn test_session_key_revoke_with_multiple_keys() {
     // Try revoking each again:
     // Key 1 should still be revokable
     vault
-        .revoke_session_key(&alice, &key_id_1)
+        .revoke_session_key_by_id(&alice, &key_id_1)
         .expect("revoke key 1 should work");
 
     // Key 2 should now error (already revoked)
-    let result = vault.revoke_session_key(&alice, &key_id_2);
+    let result = vault.revoke_session_key_by_id(&alice, &key_id_2);
     assert_eq!(result, Err(VaultError::SessionKeyRevoked));
 
     // Key 3 should still be revokable
     vault
-        .revoke_session_key(&alice, &key_id_3)
+        .revoke_session_key_by_id(&alice, &key_id_3)
         .expect("revoke key 3 should work");
 }
 
@@ -8243,7 +8257,7 @@ fn test_session_key_revoke_unauthorized() {
     // Charlie (not the delegator) tries to revoke - should fail
     // Note: due to require_auth, this test relies on mock_all_auths()
     // In a real scenario, this would fail at the auth check
-    let result = vault.revoke_session_key(&charlie, &key_id);
+    let result = vault.revoke_session_key_by_id(&charlie, &key_id);
     
     // Since we're mocking auth, let's at least verify the key exists under alice
     assert_eq!(result, Err(VaultError::SessionKeyNotFound));

@@ -154,6 +154,8 @@ pub enum VaultKey {
     MEVRecoveryPool,
     /// MEV recovery owed to a depositor
     MEVRecoveryOwed(Address),
+    /// Expiry timestamp for a wallet-authorized session key.
+    WalletSessionKey(Address, Address),
 }
 
 #[contracttype]

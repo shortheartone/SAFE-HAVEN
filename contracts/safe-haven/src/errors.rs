@@ -63,4 +63,8 @@ pub enum VaultError {
     InvalidRenewableEnergyPercent = 28,
     /// Recipient address is invalid (zero address)
     InvalidRecipient = 28,
+    /// Session key expiry must be in the future.
+    InvalidSessionKeyExpiry = 29,
+    /// Session key is not authorized for this wallet.
+    SessionKeyNotAuthorized = 30,
 }
