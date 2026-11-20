@@ -1139,3 +1139,6 @@ MIT
 
 <!-- handsoff-issue-902 -->
 - #902: Issue #11: Withdrawal Fee Calculation Accuracy
+
+<!-- handsoff-issue-970 -->
+- #970: Fix N+1 query problems in report generation
