@@ -541,3 +541,21 @@ soroban contract invoke \
 ```
 
 The response is either `TimeBased`, `LedgerBased`, or `null`.
+
+---
+
+## Related Guides
+
+### Ledger-Based Deposits
+
+For comprehensive documentation on using `deposit_by_ledger`, lock calculations, and ledger-vs-timestamp decisions, see:
+
+- **[Ledger Deposits Guide](./LEDGER_DEPOSITS_GUIDE.md)** — Full guide with use cases, examples, and patterns
+- **[Ledger Deposits Quick Reference](./LEDGER_DEPOSITS_QUICK_REFERENCE.md)** — Quick lookup for common tasks
+- **[ADR-001: Dual Deposit Types](./adr/ADR-001-dual-deposit-types.md)** — Technical design and rationale
+
+### Other Guides
+
+- **[Staker Registry Guide](./STAKER_REGISTRY_GUIDE.md)** — Staker registration and rewards
+- **[Contract Upgrade and Migration Playbook](./CONTRACT_UPGRADE_AND_MIGRATION_PLAYBOOK.md)** — Production upgrades
+- **[Circuit Breakers](./CIRCUIT_BREAKERS.md)** — Emergency pause and rate limiting
