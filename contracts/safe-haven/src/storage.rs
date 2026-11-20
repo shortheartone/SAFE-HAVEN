@@ -1562,6 +1562,8 @@ pub fn get_session_key(env: &Env, delegator: &Address, key_id: u32) -> Option<Se
 pub fn set_session_key(env: &Env, delegator: &Address, key_id: u32, entry: &SessionKeyEntry) {
     let key = VaultKey::SessionKey(delegator.clone(), key_id);
     env.storage().persistent().set(&key, entry);
+}
+
 // ================================================================
 //  NFT Evolution helpers
 // ================================================================

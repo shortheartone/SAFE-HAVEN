@@ -1295,16 +1295,6 @@ impl SafeHaven {
 
         let max_deposit = storage::get_max_deposit(&env).unwrap_or(MAX_DEPOSIT_AMOUNT);
 
-            if penalty > 0 {
-                let fee_recipient =
-                    storage::get_fee_recipient(&env).ok_or(VaultError::MissingFeeRecipient)?;
-
-                // 30 % of the penalty → fee_recipient, 70 % → staker pool
-                let fee_slice = (penalty * storage::STAKER_FEE_BPS) / 10_000;
-                let pool_slice = penalty - fee_slice; // remainder avoids rounding drift
-
-                token_client.transfer(&contract, &fee_recipient, &fee_slice);
-                storage::accumulate_staker_pool(&env, &entry.token, pool_slice);
         // Validate all amounts before transferring anything (checks before effects).
         for td in tokens_and_amounts.iter() {
             if td.amount <= 0 {

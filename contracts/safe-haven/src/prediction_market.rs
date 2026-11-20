@@ -540,6 +540,8 @@ pub fn get_market_with_outcomes(env: &Env, market_id: u32) -> Option<MarketWithO
     let market = storage::get_market_readonly(env, market_id)?;
     let outcomes = storage::get_market_outcomes(env, market_id, market.outcome_count);
     Some(MarketWithOutcomes { market, outcomes })
+}
+
 // Helper for readonly outcome access
 fn get_outcome_readonly(env: &Env, market_id: u32, outcome_id: u32) -> Option<MarketOutcome> {
     let key = soroban_sdk::Symbol::new(env, &format!("pmo_{}_{}", market_id, outcome_id));

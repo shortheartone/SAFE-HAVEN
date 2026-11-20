@@ -302,6 +302,8 @@ pub struct InsuranceClaim {
     pub amount_requested: i128,
     pub incident_evidence: String,
     pub status: ClaimStatus,
+}
+
 /// Sponsorship fund configuration and state
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -333,6 +335,11 @@ pub struct SessionKeyEntry {
     pub amount_used: i128,
     /// Timestamp when this session key was created
     pub created_at: u64,
+}
+
+/// Sponsorship fund configuration and state
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SponsorshipFund {
     /// Balance of native tokens available for sponsorship
     pub balance: i128,

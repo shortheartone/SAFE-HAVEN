@@ -4585,6 +4585,8 @@ fn test_issue111_cancel_then_withdraw_fails() {
         vault.try_withdraw(&alice, &id),
         Err(Ok(VaultError::NoDepositFound))
     );
+}
+
 #[test]
 fn test_version_returns_cargo_pkg_version() {
     let (_env, vault, _token, _admin, _alice, _fee) = setup();
@@ -5388,8 +5390,6 @@ fn test_zero_stake_removal_does_not_leave_claimable_stake() {
 }
 
 #[test]
-fn test_claim_staker_rewards_requires_registration() {
-    let (env, vault, _token, _admin, alice, _fee) = setup();
 fn test_staker_pagination_with_more_than_one_hundred_stakers() {
     let env = Env::default();
     env.mock_all_auths();
@@ -7487,6 +7487,8 @@ fn test_get_rewards_pool_total_with_max_penalty() {
 
     // Pool should have 700 (70% of 1000)
     assert_eq!(vault.get_rewards_pool_total(), 700);
+}
+
 // ================================================================
 //  Sustainability Metrics Tests
 // ================================================================
@@ -9222,6 +9224,7 @@ fn test_mev_no_conflict_between_ledger_and_timestamp_deposits() {
     // status_ledger and status_ts are both Committed; status_other is Unprotected.
     assert_eq!(status_ledger, status_ts, "both committed deposits must share the Committed status");
     assert_ne!(status_ledger, status_other, "committed deposit must differ from unprotected deposit");
+}
 
 // ================================================================
 //  Renewable Energy Percentage Tests

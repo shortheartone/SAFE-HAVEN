@@ -113,6 +113,8 @@ mod prediction_market_outcome_list_tests {
 
     // ================================================================
     //  2-Outcome Market Tests
+}
+
 mod prediction_market_tests {
     extern crate std;
 
@@ -502,6 +504,8 @@ mod prediction_market_tests {
             assert_eq!(o.outcome_id, idx as u32);
             assert_eq!(o.name, String::from_str(&env, expected_name));
         }
+    }
+
     fn test_place_bet_invalid_amount_too_large() {
         let (env, contract, bettor, token, market_id, _) = betting_fixture();
         env.as_contract(&contract, || {
@@ -785,6 +789,8 @@ mod prediction_market_tests {
             .expect("market not found");
 
         assert_eq!(market.outcome_count, 4);
+    }
+
     fn test_create_market_insufficient_close_duration() {
         // Test market creation with close_time too soon (< MIN_MARKET_DURATION_SECS)
         // Expected: InvalidResolutionTime error
@@ -1066,6 +1072,8 @@ mod prediction_market_tests {
                 expected_count
             );
         }
+    }
+
     fn test_create_market_insufficient_resolution_time() {
         // Test market creation with resolution window < min_resolution_time_secs
         // Expected: InvalidResolutionTime error
@@ -1516,4 +1524,6 @@ mod prediction_market_tests {
             "resolution_data must equal the value submitted by the oracle"
         );
     }
+}
+}
 }
