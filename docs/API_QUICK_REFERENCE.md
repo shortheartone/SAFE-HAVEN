@@ -79,10 +79,12 @@ Print this page and keep it handy while developing!
 | Function | Signature | Returns |
 |----------|-----------|---------|
 | `mev_commit` | `(depositor, deposit_id, commit_hash)` | `()` |
-| `mev_reveal` | `(depositor, deposit_id, strategy_data, recovery_amount)` | `()` |
+| `mev_reveal` | `(depositor, deposit_id, token, amount, price, nonce)` | `()` |
 | `claim_mev_recovery` | `(depositor)` | `i128` |
-| `get_mev_detections` | `(depositor, limit)` | `Vec<MEVDetection>` |
+| `get_mev_detections` | `(depositor, deposit_id, offset, limit)` | `Vec<MEVDetection>` |
 | `get_mev_status_query` | `(depositor, deposit_id)` | `MEVStatus` |
+
+See the [MEV Protection User and Implementer Guide](./MEV_PROTECTION_GUIDE.md) for commitment encoding, the reveal window, detection threshold, and claim behavior.
 
 ### Prediction Markets
 | Function | Signature | Returns |

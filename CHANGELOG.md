@@ -134,6 +134,7 @@ Include contract redeployment steps, storage migration commands, and frontend up
 
 ### Added
 
+- MEV protection user guide covering commit-reveal workflow, commitment hash encoding, reveal window, detection threshold, and recovery claim behavior (#807)
 - Staker Registry user guide with registration and claim walkthroughs, penalty and reward calculations, CLI and TypeScript SDK examples, and FAQs
 - Carbon footprint calculation coverage for the specified one-day example, varied inputs, and the maximum deposit/lock values; reject arithmetic overflow instead of saturating (#66)
 - `withdraw_stake(staker, amount)` — reduces or removes a staker's registered stake and updates `total_staked`

@@ -760,86 +760,18 @@ echo "$DEPOSIT" | jq .
 
 ## MEV Protection
 
-### Commit to MEV Strategy
+The commit hash is **not** a hash of a free-form strategy string. It is Keccak-256 over the Soroban-serialized token `Address`, followed by little-endian `i128` amount, little-endian `i128` price, and little-endian `u32` nonce. The reveal must match those values and arrive within 30 minutes.
 
-Step 1: Commit to a strategy without revealing it:
+For the full Rust hash example and the commit/reveal walkthrough, see the [MEV Protection User and Implementer Guide](./MEV_PROTECTION_GUIDE.md).
 
-```bash
-#!/bin/bash
-source ~/.safe-haven-env.sh
-
-DEPOSIT_ID=0
-
-# Create a commit hash (e.g., SHA256 of your strategy)
-STRATEGY="conservative_pricing"
-COMMIT_HASH=$(echo -n "$STRATEGY" | sha256sum | cut -d' ' -f1)
-
-echo "Committing with hash: $COMMIT_HASH"
-
-soroban contract invoke \
-  --id "$CONTRACT_ID" \
-  --source "$USER_SECRET" \
-  --network "$NETWORK" \
-  --rpc-url "$RPC_URL" \
-  --network-passphrase "$NETWORK_PASSPHRASE" \
-  -- mev_commit \
-  --depositor "$USER_ADDRESS" \
-  --deposit_id "$DEPOSIT_ID" \
-  --commit_hash "0x$COMMIT_HASH"
-
-echo "✓ Committed to MEV strategy"
+```text
+mev_commit(depositor, deposit_id, commit_hash)
+mev_reveal(depositor, deposit_id, token, amount, price, nonce)
+get_mev_pending(depositor)
+claim_mev_recovery(depositor)
 ```
 
----
-
-### Reveal MEV Strategy
-
-Step 2: Reveal and verify (after some time):
-
-```bash
-#!/bin/bash
-source ~/.safe-haven-env.sh
-
-DEPOSIT_ID=0
-STRATEGY="conservative_pricing"
-RECOVERY_AMOUNT=500000000  # Tokens recovered from MEV attack
-
-soroban contract invoke \
-  --id "$CONTRACT_ID" \
-  --source "$USER_SECRET" \
-  --network "$NETWORK" \
-  --rpc-url "$RPC_URL" \
-  --network-passphrase "$NETWORK_PASSPHRASE" \
-  -- mev_reveal \
-  --depositor "$USER_ADDRESS" \
-  --deposit_id "$DEPOSIT_ID" \
-  --strategy_data "0x$(echo -n "$STRATEGY" | od -A n -t x1 | tr -d ' \n')" \
-  --recovery_amount "$RECOVERY_AMOUNT"
-
-echo "✓ Strategy revealed and verified"
-```
-
----
-
-### Claim MEV Recovery Funds
-
-Withdraw accumulated MEV recovery:
-
-```bash
-#!/bin/bash
-source ~/.safe-haven-env.sh
-
-RECOVERED=$(soroban contract invoke \
-  --id "$CONTRACT_ID" \
-  --source "$USER_SECRET" \
-  --network "$NETWORK" \
-  --rpc-url "$RPC_URL" \
-  --network-passphrase "$NETWORK_PASSPHRASE" \
-  -- claim_mev_recovery \
-  --depositor "$USER_ADDRESS")
-
-echo "MEV recovery claimed: $RECOVERED"
-```
+`claim_mev_recovery` returns and clears an internal pending amount; it does not make a token transfer.
 
 ---
 

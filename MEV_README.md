@@ -6,8 +6,14 @@ Welcome to the MEV (Maximal Extractable Value) protection system documentation f
 
 ## 📚 Documentation Files
 
+### Current User and Implementer Guide
+**[MEV Protection User and Implementer Guide](./docs/MEV_PROTECTION_GUIDE.md)**
+- Actual commit-reveal workflow and byte-exact hash format
+- 30-minute reveal deadline and strict 200 bps detection threshold
+- Recovery claim behavior, examples, and implementation limitations
+
 ### For Quick Start
-**[MEV_QUICK_START.md](./MEV_QUICK_START.md)** (220 lines) ⚡
+**[MEV_QUICK_START.md](./MEV_QUICK_START.md)** ⚡
 - 30-second overview
 - 3-step usage guide
 - Error codes quick reference
@@ -16,7 +22,7 @@ Welcome to the MEV (Maximal Extractable Value) protection system documentation f
 **Use this if:** You want to start using MEV protection immediately.
 
 ### For Complete Specification
-**[MEV_PROTECTION.md](./MEV_PROTECTION.md)** (474 lines) 📖
+**[MEV_PROTECTION.md](./MEV_PROTECTION.md)** 📖
 - How it works (4 phases)
 - Data structures (types & storage)
 - Complete API reference
@@ -122,14 +128,7 @@ I need to track all changes
 
 ## ✅ Acceptance Criteria
 
-All criteria met:
-
-- ✅ Sandwich attacks prevented (commit-reveal scheme)
-- ✅ Front-running detection functional (TWAP-based)
-- ✅ Users receive fair execution (recovered MEV)
-- ✅ Extracted MEV returned to users (pool + claims)
-- ✅ Events log MEV attempts (4 event types)
-- ✅ Tests verify protection (13 test cases)
+The contract implements commit-reveal validation and price-deviation accounting. These mechanisms do not guarantee prevention, prove that a sandwich attack occurred, or transfer recovery tokens. See the [current guide](./docs/MEV_PROTECTION_GUIDE.md) for precise behavior.
 
 ---
 
@@ -142,7 +141,7 @@ Read: MEV_QUICK_START.md (5 min)
 
 ### 2. Learn the API
 ```
-Read: MEV_PROTECTION.md → "API Reference" section (10 min)
+Read: docs/MEV_PROTECTION_GUIDE.md (workflow, hash, and claims)
 ```
 
 ### 3. See Examples
@@ -152,7 +151,7 @@ Check: test.rs for test_mev_* examples (5 min)
 
 ### 4. Integrate
 ```
-Follow: MEV_QUICK_START.md → "Integration Checklist" (varies)
+Follow: docs/MEV_PROTECTION_GUIDE.md → "Best practices and limitations"
 ```
 
 ### 5. Deploy
@@ -196,9 +195,11 @@ finalize_mev_redistribution(admin)                  // Finalize redistribution
 
 ## 📖 How It Works (4 Phases)
 
+For current behavior, follow the [user and implementer guide](./docs/MEV_PROTECTION_GUIDE.md). In particular, the detection threshold is strictly greater than 200 bps, and recovery claims update internal accounting without transferring tokens.
+
 ```
 1. COMMIT
-   User submits: hash = keccak256(token || amount || price || nonce)
+   User submits: Keccak-256(Soroban-serialized token || LE amount || LE price || LE nonce)
    Contract stores: commit_hash with timestamp
    Status: Committed
 
@@ -208,13 +209,13 @@ finalize_mev_redistribution(admin)                  // Finalize redistribution
    Status: Revealed
 
 3. DETECTION (automatic)
-   Contract calculates: TWAP from 24-hour price history
-   Detects: sandwich attacks if price deviates > 200 bps
-   Status: AttackDetected (if attack found)
+   Contract calculates: weighted average from available price samples
+   Flags: deviations strictly greater than 200 bps (not proof of a sandwich attack)
+   Detection records and pending amount indicate a flagged deviation; status ends as Revealed after the reveal completes
 
 4. RECOVERY (claim anytime)
    User calls: claim_mev_recovery()
-   Contract transfers: recovered MEV to user
+   Contract returns and clears internal pending accounting (no token transfer)
    Pool reduced: by claimed amount
 ```
 
@@ -222,7 +223,7 @@ finalize_mev_redistribution(admin)                  // Finalize redistribution
 
 ## ⚙️ Configuration
 
-All parameters tunable in `constants.rs`:
+These compile-time parameters are defined in `constants.rs` (not runtime user settings):
 
 ```rust
 MEV_REVEAL_WINDOW_SECS = 1,800          // 30 minutes
@@ -255,8 +256,9 @@ make test
 ```
 Documentation/
 ├── MEV_README.md (this file)
-├── MEV_QUICK_START.md ..................... Quick start (220 lines)
-├── MEV_PROTECTION.md ..................... Full spec (474 lines)
+├── MEV_QUICK_START.md ..................... Quick-start pointer
+├── MEV_PROTECTION.md ...................... Guide pointer
+├── docs/MEV_PROTECTION_GUIDE.md ........... Current user and implementer guide
 ├── MEV_IMPLEMENTATION_SUMMARY.md ......... Technical overview (318 lines)
 ├── MEV_IMPLEMENTATION_CHECKLIST.md ....... Verification (221 lines)
 ├── MEV_DELIVERY_SUMMARY.md .............. Deployment guide (353 lines)

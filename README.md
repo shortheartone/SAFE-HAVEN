@@ -142,65 +142,9 @@ Deployment artifacts are written to `deployments/<network>/<timestamp>/`, includ
 
 ## MEV Protection
 
-SAFE-HAVEN includes built-in **MEV (Maximal Extractable Value) protection** to prevent sandwich attacks and front-running. The system uses a **commit-reveal scheme** combined with **time-weighted average pricing (TWAP)** to detect and mitigate MEV extraction.
+SAFE-HAVEN provides a commit-reveal flow and a price-deviation heuristic for MEV monitoring. Detection is triggered only when deviation is **greater than 200 bps**; it does not prove an attack or guarantee prevention. Recovery claims return and clear an internal accounting amount; they do not transfer tokens.
 
-### Key Features
-
-- **Commit-Reveal Scheme** — Depositors privately commit transaction details (via hash), then reveal after the commit is immutable. Prevents attackers from predicting and front-running orders.
-- **Price Monitoring** — Continuous tracking of token prices; stores up to 24 hours of hourly price samples.
-- **Sandwich Attack Detection** — Compares current price against TWAP. Deviations exceeding 200 basis points (2%) trigger attack detection.
-- **MEV Recovery & Redistribution** — Recovered value is credited to affected users' MEV pools, which they can claim individually.
-- **Transparent Event Logging** — All MEV detections, commits, and recoveries are emitted as on-chain events for audit and monitoring.
-
-### MEV Protection API
-
-| Function | Purpose |
-|---|---|
-| `mev_commit(depositor, deposit_id, commit_hash)` | Submit a private commit to enable MEV protection |
-| `mev_reveal(depositor, deposit_id, token, amount, price, nonce)` | Reveal the commit and trigger MEV detection |
-| `claim_mev_recovery(depositor)` | Claim recovered MEV from the pool |
-| `get_mev_status_query(depositor, deposit_id)` | Query MEV protection status (`Unprotected`, `Committed`, `Revealed`, `AttackDetected`) |
-| `get_mev_detections(depositor, deposit_id, offset, limit)` | Paginated view of detected attacks |
-| `get_mev_pool_total()` | Query total MEV pool (pending distribution) |
-| `finalize_mev_redistribution(admin)` | Admin function to finalize MEV redistribution |
-
-### Example: MEV Protection Workflow
-
-```
-1. Alice deposits 1000 USDC with 1% penalty, locked for 1000 seconds
-   → deposit_id = 0
-
-2. Alice submits MEV commit (private order details via hash):
-   commit_hash = Keccak256(usdc_addr || 1000 || 102 || nonce)
-   mev_commit(alice, 0, commit_hash)
-   → Status: Committed
-
-3. Within 30 minutes, Alice reveals her actual transaction:
-   mev_reveal(alice, 0, usdc_addr, 1000, 102, nonce)
-   → Contract verifies hash matches
-   → Status: Revealed
-   → Price sample recorded
-
-4. Contract detects sandwich attack via TWAP:
-   If current_price (102) deviates from TWAP (100) by > 200 bps
-   → MEV attack detected!
-   → 2 USDC recovered and added to MEV pool
-   → Event: mev_detected(alice, 0, 200, 2)
-
-5. Alice claims her recovery:
-   mev_recovered = claim_mev_recovery(alice)
-   → Returns: 2 USDC
-   → Tokens transferred to alice
-```
-
-### Configuration
-
-| Constant | Value | Description |
-|---|---|---|
-| `MEV_REVEAL_WINDOW_SECS` | 1,800 (30 min) | Time allowed to reveal after commit |
-| `MEV_PRICE_DEVIATION_THRESHOLD_BPS` | 200 (2%) | Deviation threshold to trigger detection |
-
-For more details, see **[MEV_PROTECTION.md](./MEV_PROTECTION.md)**.
+For workflow steps, exact hash encoding, Rust example, claim process, and limitations, see the [MEV Protection User and Implementer Guide](./docs/MEV_PROTECTION_GUIDE.md).
 
 ---
 

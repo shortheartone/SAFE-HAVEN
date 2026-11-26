@@ -1249,130 +1249,21 @@ soroban contract invoke \
 
 ## MEV Protection
 
-**Purpose**: Protect deposits from maximal extractable value (MEV) attacks via commit-reveal scheme.
+See the [MEV Protection User and Implementer Guide](./MEV_PROTECTION_GUIDE.md) for the complete workflow, exact hash format and Rust example, 30-minute deadline, 200 bps detection threshold, query functions, recovery claims, and limitations.
 
-### `mev_commit(depositor, deposit_id, commit_hash)`
+Current contract entry points:
 
-**Purpose**: Commit to a MEV prevention strategy (phase 1 of 2).
+| Function | Signature |
+|---|---|
+| `mev_commit` | `(depositor: Address, deposit_id: u32, commit_hash: BytesN<32>)` |
+| `mev_reveal` | `(depositor: Address, deposit_id: u32, token: Address, amount: i128, price: i128, nonce: u32)` |
+| `claim_mev_recovery` | `(depositor: Address) -> Result<i128, VaultError>` |
+| `get_mev_detections` | `(depositor: Address, deposit_id: u32, offset: u32, limit: u32)` |
+| `get_mev_status_query` | `(depositor: Address, deposit_id: u32) -> MEVStatus` |
+| `get_mev_pending` | `(depositor: Address) -> i128` |
+| `get_mev_pool_total` | `() -> i128` |
 
-**Parameters**:
-
-| Parameter | Type | Constraints | Description |
-|-----------|------|-------------|-------------|
-| `depositor` | `Address` | Must authorize | Account |
-| `deposit_id` | `u32` | — | Deposit identifier |
-| `commit_hash` | `Bytes` (32 bytes) | SHA256 hash | Commitment to strategy |
-
-**Returns**: `Result<(), VaultError>`
-
-**Example**:
-
-```bash
-# Commit hash = SHA256("secret_strategy_data")
-soroban contract invoke \
-  --id "$CONTRACT_ID" \
-  --source "$USER_SECRET" \
-  --network "$NETWORK" \
-  --rpc-url "$RPC_URL" \
-  --network-passphrase "$NETWORK_PASSPHRASE" \
-  -- mev_commit \
-  --depositor "$USER_ADDRESS" \
-  --deposit_id 0 \
-  --commit_hash "0x$(echo -n 'secret' | sha256sum | cut -d' ' -f1)"
-```
-
----
-
-### `mev_reveal(depositor, deposit_id, strategy_data, recovery_amount)`
-
-**Purpose**: Reveal and verify MEV protection strategy (phase 2 of 2).
-
-**Parameters**:
-
-| Parameter | Type | Constraints | Description |
-|-----------|------|-------------|-------------|
-| `depositor` | `Address` | Must authorize | Account |
-| `deposit_id` | `u32` | — | Deposit identifier |
-| `strategy_data` | `Bytes` | — | Original strategy data |
-| `recovery_amount` | `i128` | ≥ 0 | Funds recovered from MEV |
-
-**Returns**: `Result<(), VaultError>`
-
-**Verification**:
-- Compute `SHA256(strategy_data)` and verify it matches the committed hash
-- If match, record recovery amount
-
-**Example**:
-
-```bash
-soroban contract invoke \
-  --id "$CONTRACT_ID" \
-  --source "$USER_SECRET" \
-  --network "$NETWORK" \
-  --rpc-url "$RPC_URL" \
-  --network-passphrase "$NETWORK_PASSPHRASE" \
-  -- mev_reveal \
-  --depositor "$USER_ADDRESS" \
-  --deposit_id 0 \
-  --strategy_data "0x..." \
-  --recovery_amount 500
-```
-
----
-
-### `claim_mev_recovery(depositor)`
-
-**Purpose**: Claim accumulated MEV recovery funds.
-
-**Parameters**:
-
-| Parameter | Type | Constraints | Description |
-|-----------|------|-------------|-------------|
-| `depositor` | `Address` | Must authorize | Account |
-
-**Returns**: `Result<i128, VaultError>` — Amount recovered
-
-**Example**:
-
-```bash
-soroban contract invoke \
-  --id "$CONTRACT_ID" \
-  --source "$USER_SECRET" \
-  --network "$NETWORK" \
-  --rpc-url "$RPC_URL" \
-  --network-passphrase "$NETWORK_PASSPHRASE" \
-  -- claim_mev_recovery \
-  --depositor "$USER_ADDRESS"
-```
-
----
-
-### `get_mev_detections(depositor, limit)`
-
-**Purpose**: Query detected MEV attacks for an account.
-
-**Parameters**:
-
-| Parameter | Type | Constraints | Description |
-|-----------|------|-------------|-------------|
-| `depositor` | `Address` | — | Account |
-| `limit` | `u32` | — | Max results |
-
-**Returns**: `Vec<MEVDetection>` — Array of detection records
-
-**Example**:
-
-```bash
-soroban contract invoke \
-  --id "$CONTRACT_ID" \
-  --source "$USER_SECRET" \
-  --network "$NETWORK" \
-  --rpc-url "$RPC_URL" \
-  --network-passphrase "$NETWORK_PASSPHRASE" \
-  -- get_mev_detections \
-  --depositor "$USER_ADDRESS" \
-  --limit 10
-```
+`claim_mev_recovery` returns and clears pending accounting; it does not transfer tokens. The threshold flags deviations strictly greater than 200 bps, and detections are a heuristic rather than proof of an attack.
 
 ---
 
